@@ -11,6 +11,8 @@ import struct
 import subprocess
 from pathlib import Path
 
+import numpy as np
+
 from .. import syncalgo
 from ..captions_fmt import parse_srt
 from ..config import settings
@@ -165,6 +167,12 @@ def run(ctx: Ctx) -> str:
         inner_start, inner_dur = shared + 300, (e - max(s, intro_end)) - 600
         if inner_dur < 500:
             continue
+        # freezedetect averages over the whole frame, so a small moving panel next to an idle WISE
+        # screen can read as "frozen". A real freeze is static at the pixel level — confirm that first.
+        out_frames = gray_frames(final, fps=6, start_ms=max(s, intro_end) + 300, dur_ms=inner_dur,
+                                 width=160, height=90).astype(np.int16)
+        if len(out_frames) > 1 and float(np.median(np.abs(np.diff(out_frames, axis=0)).mean(axis=(1, 2)))) > 0.03:
+            continue
         moving = False
         for role in ("physical", "system"):
             src = p.sync.physical_ms(inner_start) if role == "physical" else p.sync.system_ms(inner_start)
@@ -187,4 +195,4 @@ def run(ctx: Ctx) -> str:
         " — " + "; ".join(c.name for c in errors) if errors else "")
 
 
-STAGE = Stage("qa", "Quality checks", "1", _inputs, run)
+STAGE = Stage("qa", "Quality checks", "2", _inputs, run)

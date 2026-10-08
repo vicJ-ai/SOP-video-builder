@@ -118,7 +118,7 @@ export const DualPlayer = forwardRef<DualPlayerHandle, Props>(function DualPlaye
         <input type="range" min={0} max={durationMs} value={shared} onChange={(e) => seek(Number(e.target.value))} aria-label="Position" />
         <span className="mono">{fmt(shared)}</span>
         {cues.length > 0 && (
-          <label className="check small" title="Play the narration while previewing">
+          <label className="checkbox small" title="Play the narration while previewing">
             <input type="checkbox" checked={voice} onChange={(e) => { setVoice(e.target.checked); if (!e.target.checked) stopVoices(); }} />
             Narration
           </label>

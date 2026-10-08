@@ -116,11 +116,15 @@ function Row({ e, p, autoLine, audio, selected, locked, onSelect, save, remove }
             <span className="muted small">Says:</span>
             <input disabled={locked} value={narr} onChange={(x) => setNarr(x.target.value)} onBlur={commitNarr}
                    onKeyDown={enter(() => undefined)} placeholder={autoLine ?? "(not narrated — pick an SOP step or write a line)"} />
-            <button className="icon" title="Hear this line" disabled={!audio} onClick={(x) => { x.stopPropagation(); play(); }}>🔊</button>
+            <button className="icon" title="Hear this line" aria-label="Hear this line" disabled={!audio} onClick={(x) => { x.stopPropagation(); play(); }}>
+              <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden><path fill="currentColor" d="M3 9v6h4l5 5V4L7 9H3Zm13.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4ZM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6Z" /></svg>
+            </button>
           </div>
         ) : null}
       </div>
-      <button className="icon trash" disabled={locked} title="Remove (Delete)" aria-label="Remove" onClick={(x) => { x.stopPropagation(); remove(); }}>🗑</button>
+      <button className="icon trash" disabled={locked} title="Remove (Delete)" aria-label="Remove" onClick={(x) => { x.stopPropagation(); remove(); }}>
+        <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2Zm-3 6h12l-1 12H7L6 9Zm4 2v8h2v-8h-2Zm4 0v8h2v-8h-2Z" /></svg>
+      </button>
     </div>
   );
 }
@@ -242,7 +246,7 @@ export function EditTab({ p, refresh, setTab }: TabProps) {
       <div className="row between">
         <h3>{live.length - hints} actions{hints ? <span className="muted small"> + {hints} detected moments</span> : null}</h3>
         {hints > 0 && (
-          <label className="check small"><input type="checkbox" checked={showHints} onChange={(x) => setShowHints(x.target.checked)} />Show undescribed moments</label>
+          <label className="checkbox small"><input type="checkbox" checked={showHints} onChange={(x) => setShowHints(x.target.checked)} />Show undescribed moments</label>
         )}
       </div>
       <div className={`edit-list ${rendering ? "locked" : ""}`}>
