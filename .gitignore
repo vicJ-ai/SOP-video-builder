@@ -1,0 +1,14 @@
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+web/dist/
+projects/
+tools/
+backend/.env
+render/out/
+*.log
+samples/
+backend/.pytest_cache/
+render/src/**/*.props.json

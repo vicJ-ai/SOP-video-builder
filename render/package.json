@@ -1,0 +1,27 @@
+{
+  "name": "sop-video-render",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Remotion + Remocn compositions for the UNIS SOP Video Builder (analysis preview and final narrated video).",
+  "type": "module",
+  "scripts": {
+    "vendor": "node scripts/vendor-remocn.mjs",
+    "studio": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@remotion/captions": "4.0.534",
+    "@remotion/cli": "4.0.534",
+    "@remotion/paths": "4.0.534",
+    "@types/culori": "^4.0.1",
+    "culori": "^4.0.2",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "remotion": "4.0.534"
+  },
+  "devDependencies": {
+    "@types/react": "19.1.8",
+    "typescript": "5.8.3"
+  }
+}

@@ -1,0 +1,186 @@
+"""9. Qwen3-VL action timeline, coarse-to-fine.
+
+coarse — the combined preview, chunked, at a modest frame rate -> broad workflow events
+fine   — short candidate windows (taps, scans, confirmations) re-examined at a higher rate on the
+         ORIGINAL recordings, so small WISE controls stay legible
+Model timestamps are candidates, not ground truth: they are clamped, validated and later checked
+by OCR, SOP comparison and human review. Human-created or human-edited events are never overwritten.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import tempfile
+from pathlib import Path
+
+from ..config import settings
+from ..media import extract_frame
+from ..models import Event
+from ..pipeline import Ctx, Stage
+from ..providers.vlm import SYSTEM_PROMPT, Frame, VlmEvents, get_vlm
+from ..store import stable_hash
+from .preview import PREVIEW
+
+log = logging.getLogger(__name__)
+FINE_MAX_WINDOW_MS = 6000
+FINE_MAX_WINDOWS = 80
+
+
+def _inputs(p):
+    return {
+        "sync": [p.sync.lag_ms, p.sync.shared_start_physical_ms, p.sync.shared_duration_ms],
+        "windows": [w.model_dump() for w in p.windows],
+        "vlm": [settings.vlm_provider, settings.vlm_model, settings.vlm_coarse_fps, settings.vlm_fine_fps,
+                settings.vlm_chunk_s, settings.vlm_max_frames, settings.mock_events_path],
+        "controls": sorted({c for s in p.sop_steps for c in s.controls}),
+    }
+
+
+def event_id(start_ms: int, end_ms: int, view: str, action: str) -> str:
+    return "ev-" + stable_hash([start_ms, end_ms, view, action])[:6]
+
+
+def _frames(path: Path, shared_ms: list[int], label: str, *, max_width: int,
+            to_source=lambda t: t) -> list[Frame]:
+    """Frames labelled with shared time, grabbed at the matching source time."""
+    out = []
+    with tempfile.TemporaryDirectory() as tmp:
+        for i, t in enumerate(shared_ms):
+            jpg = extract_frame(path, to_source(t), Path(tmp) / f"{i}.jpg", max_width=max_width)
+            out.append(Frame(t_ms=t, label=label, jpeg=jpg.read_bytes()))
+    return out
+
+
+def _sample(start_ms: int, end_ms: int, fps: float, cap: int) -> list[int]:
+    step = max(1000 / fps, (end_ms - start_ms) / max(1, cap))
+    times, t = [], float(start_ms)
+    while t < end_ms and len(times) < cap:
+        times.append(int(t))
+        t += step
+    return times
+
+
+def _to_events(resp: VlmEvents, lo_ms: int, hi_ms: int, source: str, shift_ms: int = 0) -> list[Event]:
+    out = []
+    for e in resp.events:
+        s = int(round(e.start_s * 1000)) + shift_ms
+        en = int(round(e.end_s * 1000)) + shift_ms
+        s, en = max(lo_ms, min(s, hi_ms)), max(lo_ms, min(en, hi_ms))
+        if en < s:
+            s, en = en, s
+        if en - s < 100:
+            en = min(hi_ms, s + 400)
+        reasons = []
+        if e.confidence < 0.6:
+            reasons.append(f"low model confidence ({e.confidence:.2f})")
+        out.append(Event(id=event_id(s, en, e.view, e.action), start_ms=s, end_ms=en, view=e.view, action=e.action.strip(),
+                         kind=e.kind, visible_text=[t.strip() for t in e.visible_text if t.strip()],
+                         confidence=round(e.confidence, 3), source=source, review_required=bool(reasons),
+                         review_reasons=reasons))
+    return out
+
+
+def _coarse(ctx: Ctx, vlm) -> list[Event]:
+    p = ctx.project
+    preview = ctx.work / PREVIEW
+    chunk = int(settings.vlm_chunk_s * 1000)
+    events: list[Event] = []
+    for lo in range(0, p.sync.shared_duration_ms, chunk):
+        hi = min(p.sync.shared_duration_ms, lo + chunk)
+        times = _sample(lo, hi, settings.vlm_coarse_fps, settings.vlm_max_frames)
+        frames = _frames(preview, times, "COMBINED", max_width=1920)
+        instr = (f"These frames span {lo/1000:.1f}s-{hi/1000:.1f}s of a synchronized side-by-side recording: "
+                 "LEFT = physical floor camera, RIGHT = WISE system screen; the shared clock is burned in at the top. "
+                 "List each distinct observed action with its start and end time.")
+        try:
+            events += _to_events(vlm.describe_window(frames, instruction=instr), lo, hi, "vlm-coarse")
+        except Exception as exc:  # noqa: BLE001 - one bad chunk must not sink the whole analysis
+            log.warning("coarse chunk %s-%s failed: %s", lo, hi, exc)
+            events.append(Event(id=event_id(lo, hi, "both", "analysis failed"), start_ms=lo, end_ms=hi, view="both",
+                                action="(analysis failed for this section — review manually)", confidence=0.0,
+                                source="vlm-coarse", review_required=True, review_reasons=[f"VLM error: {exc}"[:200]]))
+    return events
+
+
+def _fine(ctx: Ctx, vlm) -> list[Event]:
+    p = ctx.project
+    glossary = sorted({c for s in p.sop_steps for c in s.controls})
+    targets = [w for w in p.windows if w.end_ms - w.start_ms <= FINE_MAX_WINDOW_MS
+               and ({"screen-change", "audio-peak"} & set(w.signals))]
+    targets = sorted(targets, key=lambda w: -w.strength)[:FINE_MAX_WINDOWS]
+    events: list[Event] = []
+    for w in sorted(targets, key=lambda w: w.start_ms):
+        cap = settings.vlm_max_frames
+        sys_times = _sample(w.start_ms, w.end_ms, settings.vlm_fine_fps, cap * 2 // 3)
+        phys_times = _sample(w.start_ms, w.end_ms, settings.vlm_fine_fps / 2, cap - len(sys_times))
+        frames = _frames(ctx.system_path(), sys_times, "SYSTEM", max_width=1600, to_source=p.sync.system_ms)
+        pf = _frames(ctx.proxy("physical"), phys_times, "PHYSICAL", max_width=960, to_source=p.sync.physical_ms)
+        instr = (f"Close-up analysis of {w.start_ms/1000:.2f}s-{w.end_ms/1000:.2f}s. SYSTEM frames are the full-resolution "
+                 "WISE screen; PHYSICAL frames are the floor camera at the same clock. Identify the exact quick actions "
+                 "(taps, scans, confirmations, results) and their precise times."
+                 + (f" Control names that may appear (spell them exactly as on screen, only if visible): {', '.join(glossary)}."
+                    if glossary else ""))
+        try:
+            events += _to_events(vlm.describe_window(sorted(frames + pf, key=lambda f: f.t_ms), instruction=instr),
+                                 w.start_ms, w.end_ms, "vlm-fine")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("fine window %s-%s failed: %s", w.start_ms, w.end_ms, exc)
+    return events
+
+
+def _mock(ctx: Ctx) -> list[Event]:
+    """Without a VLM: fixture events (tests / demos) or signal-derived placeholders that require review."""
+    if settings.mock_events_path:
+        raw = json.loads(Path(settings.mock_events_path).read_text())
+        out = []
+        for e in raw:
+            ev = Event(id=e.get("id") or event_id(e["start_ms"], e["end_ms"], e["view"], e["action"]),
+                       **{k: v for k, v in e.items() if k != "id"})
+            ev.source = "mock"
+            out.append(ev)
+        return out
+    out = []
+    for w in ctx.project.windows:
+        what = {"system": "Screen change on the WISE system", "physical": "Physical handling motion",
+                "both": "Activity in both views"}[w.view_hint]
+        out.append(Event(id=event_id(w.start_ms, w.end_ms, w.view_hint, what), start_ms=w.start_ms, end_ms=w.end_ms,
+                         view=w.view_hint, action=what, confidence=0.2, source="mock", review_required=True,
+                         review_reasons=["no vision model configured — describe this action"]))
+    return out
+
+
+def overlap(a: Event, b: Event) -> float:
+    inter = max(0, min(a.end_ms, b.end_ms) - max(a.start_ms, b.start_ms))
+    return inter / max(1, min(a.end_ms - a.start_ms, b.end_ms - b.start_ms))
+
+
+def merge(coarse: list[Event], fine: list[Event], kept: list[Event]) -> list[Event]:
+    """Fine events replace overlapping coarse events of a compatible view; human events win over both."""
+    out = [c for c in coarse if not any(overlap(c, f) > 0.5 and (c.view == f.view or "both" in (c.view, f.view))
+                                        for f in fine)]
+    out += fine
+    out = [e for e in out if not any(overlap(e, k) > 0.5 for k in kept)]
+    return sorted(out + kept, key=lambda e: (e.start_ms, e.end_ms))
+
+
+def run(ctx: Ctx) -> str:
+    p = ctx.project
+    vlm = get_vlm()
+    # reviewer work survives re-analysis: edited, added and removed actions are kept as they are
+    kept = [e for e in p.events if e.human_edited or e.source == "human" or e.rejected]
+    if vlm.available():
+        coarse, fine = _coarse(ctx, vlm), _fine(ctx, vlm)
+        how = f"{settings.vlm_model} ({len(coarse)} coarse, {len(fine)} fine)"
+    else:
+        coarse, fine = _mock(ctx), []
+        how = "mock fixture" if settings.mock_events_path else "mock (signal placeholders)"
+    p.events = merge(coarse, fine, kept)
+    ctx.provenance("analyze", provider=vlm.name, model=settings.vlm_model if vlm.available() else None,
+                   coarse_fps=settings.vlm_coarse_fps, fine_fps=settings.vlm_fine_fps, chunk_s=settings.vlm_chunk_s,
+                   prompt_hash=stable_hash(SYSTEM_PROMPT))
+    flagged = sum(e.review_required for e in p.events)
+    return f"{len(p.events)} events via {how}; {flagged} flagged for review"
+
+
+STAGE = Stage("analyze", "Qwen3-VL action timeline", "1", _inputs, run)

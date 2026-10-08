@@ -1,0 +1,69 @@
+import { Composition, type CalculateMetadataFunction } from "remotion";
+import { Final } from "./Final";
+import { Preview } from "./Preview";
+import type { FinalProps, PreviewProps } from "./types";
+
+const source = { src: "", width: 1920, height: 1080, label: "" };
+
+const metadata = <T extends { fps: number; width: number; height: number; durationInFrames: number }>(): CalculateMetadataFunction<T> =>
+  ({ props }) => ({
+    fps: props.fps,
+    width: props.width,
+    height: props.height,
+    durationInFrames: Math.max(1, props.durationInFrames),
+  });
+
+const previewDefaults: PreviewProps = {
+  fps: 30,
+  width: 1920,
+  height: 1080,
+  durationInFrames: 90,
+  title: "Analysis preview",
+  physical: { ...source, label: "Physical" },
+  system: { ...source, label: "WISE" },
+  physicalStartFrame: 0,
+  systemStartFrame: 0,
+};
+
+const finalDefaults: FinalProps = {
+  fps: 30,
+  width: 1920,
+  height: 1080,
+  durationInFrames: 150,
+  title: "SOP title",
+  subtitle: "Standard Operating Procedure",
+  draft: true,
+  physical: { ...source, label: "Floor" },
+  system: { ...source, label: "WISE" },
+  segments: [{ kind: "intro", fromFrame: 0, durationInFrames: 90, physicalStartFrame: 0, systemStartFrame: 0 }],
+  cues: [],
+  captions: [],
+  layout: [],
+  steps: [],
+  flags: [],
+};
+
+export const Root: React.FC = () => (
+  <>
+    <Composition
+      id="Preview"
+      component={Preview}
+      defaultProps={previewDefaults}
+      calculateMetadata={metadata<PreviewProps>()}
+      fps={30}
+      width={1920}
+      height={1080}
+      durationInFrames={90}
+    />
+    <Composition
+      id="Final"
+      component={Final}
+      defaultProps={finalDefaults}
+      calculateMetadata={metadata<FinalProps>()}
+      fps={30}
+      width={1920}
+      height={1080}
+      durationInFrames={150}
+    />
+  </>
+);
