@@ -1,11 +1,17 @@
-import { useEffect, useRef, useState } from "react";
-import { api, type Health, type Summary } from "./api";
+import { useRef, useState } from "react";
+import { api, type Summary } from "./api";
 
 type Slot = "physical" | "system" | "sop";
-const SLOTS: { key: Slot; label: string; hint: string; accept: string }[] = [
-  { key: "physical", label: "Physical recording", hint: "Floor camera: the handling work", accept: "video/*" },
-  { key: "system", label: "System recording", hint: "WISE screen recording", accept: "video/*" },
-  { key: "sop", label: "SOP (.md)", hint: "Numbered steps in Markdown", accept: ".md,.markdown,text/markdown" },
+const SLOTS: { key: Slot; n: string; label: string; hint: string; accept: string; tone: string }[] = [
+  { key: "physical", n: "01", label: "Floor recording", hint: "The physical work, filmed on the floor", accept: "video/*", tone: "red" },
+  { key: "system", n: "02", label: "WISE recording", hint: "The screen recording of the system", accept: "video/*", tone: "blue" },
+  { key: "sop", n: "03", label: "SOP document", hint: "The procedure as a Markdown (.md) file", accept: ".md,.markdown,text/markdown", tone: "green" },
+];
+
+const STEPS = [
+  ["Sync", "Both recordings are aligned on their shared audio and verified at the start, middle and end."],
+  ["Edit & review", "Describe actions, match them to SOP steps and preview narration live — nothing to approve."],
+  ["Render", "One click renders the narrated, captioned video with an SOP coverage report."],
 ];
 
 function DropSlot({ slot, file, onFile }: { slot: (typeof SLOTS)[number]; file: File | null; onFile: (f: File) => void }) {
@@ -14,58 +20,35 @@ function DropSlot({ slot, file, onFile }: { slot: (typeof SLOTS)[number]; file: 
   return (
     <button
       type="button"
-      className={`drop ${over ? "over" : ""} ${file ? "filled" : ""}`}
+      className={`drop tone-${slot.tone} ${over ? "over" : ""} ${file ? "filled" : ""}`}
       onClick={() => input.current?.click()}
       onDragOver={(e) => { e.preventDefault(); setOver(true); }}
       onDragLeave={() => setOver(false)}
       onDrop={(e) => { e.preventDefault(); setOver(false); const f = e.dataTransfer.files[0]; if (f) onFile(f); }}
     >
-      <span className="drop-label">{slot.label}</span>
-      <span className="muted small">{file ? `${file.name} · ${(file.size / 1e6).toFixed(1)} MB` : slot.hint}</span>
+      <span className="drop-top">
+        <span className="drop-n">{slot.n}</span>
+        <span className="drop-label">{slot.label}</span>
+      </span>
+      <span className="drop-body">
+        {file
+          ? <><span className="drop-file">{file.name}</span><span className="muted small">{(file.size / 1e6).toFixed(1)} MB · click to change</span></>
+          : <><span className="drop-cta">Drop file or browse</span><span className="muted small">{slot.hint}</span></>}
+      </span>
+      <span className="drop-bar" aria-hidden />
       <input ref={input} type="file" hidden accept={slot.accept} onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} />
     </button>
   );
 }
 
-function HealthPanel({ health }: { health: Health | null }) {
-  if (!health) return null;
-  const row = (label: string, ok: boolean, detail: string) => (
-    <li key={label}><span className={`dot ${ok ? "ok" : "warn"}`} />{label}<span className="muted small">{detail}</span></li>
-  );
-  return (
-    <section className="card">
-      <h3>Environment</h3>
-      <ul className="health">
-        {row("FFmpeg", !!health.ffmpeg, health.ffmpeg ?? "not found")}
-        {row("Renderer", health.renderer !== "remotion" || health.remotion, `${health.renderer}${health.remotion ? " (Remocn/Remotion ready)" : ""}`)}
-        {row("Vision model", health.vlm.provider !== "mock", health.vlm.provider === "mock" ? "mock — set VLM_PROVIDER=openai" : health.vlm.model)}
-        {row("Voice", health.tts.provider !== "mock", `${health.tts.provider} · ${health.tts.voice}`)}
-        {row("SkellySync", health.skellysync, health.skellysync ? "installed (isolated)" : "built-in estimators only")}
-        {row("Transcription", health.extras["faster-whisper"], health.extras["faster-whisper"] ? "faster-whisper" : "not installed")}
-        {row("OCR", health.extras["paddleocr"], health.extras["paddleocr"] ? "PaddleOCR" : "not installed")}
-      </ul>
-    </section>
-  );
-}
-
-export function Home() {
-  const [projects, setProjects] = useState<Summary[]>([]);
-  const [health, setHealth] = useState<Health | null>(null);
+export function Home({ projects }: { projects: Summary[] }) {
   const [files, setFiles] = useState<Record<Slot, File | null>>({ physical: null, system: null, sop: null });
   const [title, setTitle] = useState("");
   const [autoApprove, setAutoApprove] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-
-  useEffect(() => {
-    const load = () => api.list().then(setProjects).catch(() => undefined);
-    load();
-    api.health().then(setHealth).catch(() => undefined);
-    const t = setInterval(load, 3000);
-    return () => clearInterval(t);
-  }, []);
-
   const ready = files.physical && files.system && files.sop;
+  const count = Object.values(files).filter(Boolean).length;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -88,42 +71,65 @@ export function Home() {
   }
 
   return (
-    <div className="home">
-      <form className="card new" onSubmit={submit}>
-        <h2>New SOP video</h2>
+    <div className="page home">
+      <header className="hero">
+        <div className="eyebrow">UNIS · Training</div>
+        <h1>Turn a process into a<br />training video.</h1>
+        <p className="lead">Upload the floor recording, the WISE screen recording and the SOP. The builder syncs them,
+          maps every action to the procedure and produces a narrated, captioned video.</p>
+      </header>
+
+      <form className="upload" onSubmit={submit}>
+        <div className="section-head">
+          <h2>New SOP video</h2>
+          <span className="muted">{count}/3 files</span>
+        </div>
         <div className="drops">
           {SLOTS.map((s) => (
             <DropSlot key={s.key} slot={s} file={files[s.key]} onFile={(f) => setFiles({ ...files, [s.key]: f })} />
           ))}
         </div>
-        <div className="row">
-          <input className="grow" placeholder="Process title (defaults to the SOP title)" value={title} onChange={(e) => setTitle(e.target.value)} />
-          <label className="check"><input type="checkbox" checked={autoApprove} onChange={(e) => setAutoApprove(e.target.checked)} />Skip review gates</label>
-          <button className="primary" disabled={!ready || busy}>{busy ? "Uploading…" : "Upload & start"}</button>
+        <div className="upload-actions">
+          <label className="field grow">
+            <span>Process title</span>
+            <input placeholder="Defaults to the SOP title" value={title} onChange={(e) => setTitle(e.target.value)} />
+          </label>
+          <label className="checkbox"><input type="checkbox" checked={autoApprove} onChange={(e) => setAutoApprove(e.target.checked)} />
+            Render without review</label>
+          <button className="primary lg" disabled={!ready || busy}>{busy ? "Uploading…" : "Upload & start"}</button>
         </div>
         {error && <p className="error">{error}</p>}
-        <p className="muted small">Originals are kept unchanged. Footage outside the shared recording interval is flagged, never silently discarded.</p>
+        <p className="muted small">Original files are kept unchanged. Footage outside the shared recording time is flagged, never silently discarded.</p>
       </form>
 
-      <div className="home-grid">
-        <section className="card">
-          <h3>Projects</h3>
-          {projects.length === 0 && <p className="muted">No projects yet.</p>}
-          <ul className="projects">
-            {projects.map((p) => (
-              <li key={p.id}>
-                <a href={`#/p/${p.id}`}>
-                  <strong>{p.title}</strong>
-                  <span className={`pill ${p.current_state}`}>{p.running ? "running" : p.current_state.replace("_", " ")}</span>
-                  {p.current && <span className="muted small">{p.current}</span>}
-                  <span className="bar"><span style={{ width: `${Math.round(p.progress * 100)}%` }} /></span>
-                </a>
-              </li>
+      <section className="how">
+        {STEPS.map(([t, d], i) => (
+          <div key={t} className="how-item">
+            <span className="how-n">{String(i + 1).padStart(2, "0")}</span>
+            <h3>{t}</h3>
+            <p className="muted">{d}</p>
+          </div>
+        ))}
+      </section>
+
+      {projects.length > 0 && (
+        <section>
+          <div className="section-head"><h2>Recent projects</h2></div>
+          <div className="project-grid">
+            {projects.slice(0, 6).map((p) => (
+              <a key={p.id} href={`#/p/${p.id}`} className="project-card">
+                <span className={`status ${p.running ? "running" : p.current_state}`}>
+                  <span className="dot" />{p.running ? "Working" : p.current_state === "awaiting_review" ? "Ready for review"
+                    : p.current_state === "done" ? "Complete" : p.current_state === "failed" ? "Needs attention" : "In progress"}
+                </span>
+                <strong>{p.title}</strong>
+                <span className="bar"><span style={{ width: `${Math.round(p.progress * 100)}%` }} /></span>
+                <span className="muted small">Updated {new Date(p.updated_at).toLocaleString()}</span>
+              </a>
             ))}
-          </ul>
+          </div>
         </section>
-        <HealthPanel health={health} />
-      </div>
+      )}
     </div>
   );
 }

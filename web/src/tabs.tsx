@@ -12,6 +12,7 @@ export function OverviewTab({ p, setTab }: TabProps) {
   const live = p.events.filter((e) => !e.rejected);
   const hints = live.filter(isHint).length;
   const qa = p.qa.find((q) => q.target === "final.mp4");
+  const outdated = !p.review.approved && ["stale", "pending"].includes(p.stages.render?.state ?? "");
   const errors = p.provenance.errors ?? {};
   return (
     <div className="stack">
@@ -38,8 +39,11 @@ export function OverviewTab({ p, setTab }: TabProps) {
         </button>
         <button className="stat" onClick={() => setTab("deliverables")}>
           <span className="label">Final QA</span>
-          <span className="value">{qa ? (qa.checks.every((c) => c.ok || c.severity !== "error") ? "pass" : "fail") : "—"}</span>
-          <span className="small muted">{qa ? `${qa.checks.filter((c) => !c.ok).length} findings` : "after render"}</span>
+          <span className="value">{!qa ? "—" : outdated ? "Outdated" : qa.checks.every((c) => c.ok || c.severity !== "error") ? "Pass" : "Fail"}</span>
+          <span className="small muted">
+            {!qa ? "after render" : outdated ? "edited since the last render"
+              : (n => `${n} finding${n === 1 ? "" : "s"}`)(qa.checks.filter((c) => !c.ok).length)}
+          </span>
         </button>
       </div>
       {p.exists.preview && (
@@ -90,7 +94,9 @@ export function SopTab({ p, refresh }: TabProps) {
                 <tr key={s.id}>
                   <td className="mono">{s.number}</td>
                   <td>
-                    {s.text}
+                    {s.title && s.text.startsWith(s.title)
+                      ? <><strong>{s.title}</strong><div className="muted small step-body">{s.text.slice(s.title.length).replace(/^[\s.:–—-]+/, "")}</div></>
+                      : s.text}
                     {s.controls.length > 0 && <div className="small muted">controls: {s.controls.map((x) => <code key={x}>{x}</code>)}</div>}
                     {s.warnings.map((w) => <div key={w} className="small warn-text">⚠ {w}</div>)}
                   </td>
