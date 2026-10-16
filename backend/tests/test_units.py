@@ -204,3 +204,15 @@ def test_ocr_text_matching():
     assert not text_present("Confirm", ["Cancel"])
     e = Event(id="x", start_ms=0, end_ms=1, view="system", action="a", ocr=[OcrHit(text="Confirm", score=0.9)])
     assert e.ocr[0].text == "Confirm"
+
+
+def test_edge_voice_is_selected_and_validated(monkeypatch):
+    from dataclasses import replace
+    import pytest
+    from app.providers import tts
+    monkeypatch.setattr(tts, "settings", replace(tts.settings, tts_provider="edge"))
+    voice = tts.get_tts()
+    assert isinstance(voice, tts.EdgeTts) and voice.voice_id() == "edge:en-US-JennyNeural:+0%:+0Hz:+0%"
+    monkeypatch.setattr(tts, "settings", replace(tts.settings, tts_edge_rate="fast"))
+    with pytest.raises(ValueError, match="RATE"):
+        tts.EdgeTts()

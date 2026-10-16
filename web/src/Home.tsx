@@ -44,7 +44,7 @@ function DropSlot({ slot, file, onFile }: { slot: (typeof SLOTS)[number]; file: 
 export function Home({ projects }: { projects: Summary[] }) {
   const [files, setFiles] = useState<Record<Slot, File | null>>({ physical: null, system: null, sop: null });
   const [title, setTitle] = useState("");
-  const [autoApprove, setAutoApprove] = useState(false);
+  const [autoApprove, setAutoApprove] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const ready = files.physical && files.system && files.sop;
@@ -95,7 +95,7 @@ export function Home({ projects }: { projects: Summary[] }) {
             <input placeholder="Defaults to the SOP title" value={title} onChange={(e) => setTitle(e.target.value)} />
           </label>
           <label className="checkbox"><input type="checkbox" checked={autoApprove} onChange={(e) => setAutoApprove(e.target.checked)} />
-            Render without review</label>
+            Render automatically (skip review)</label>
           <button className="primary lg" disabled={!ready || busy}>{busy ? "Uploading…" : "Upload & start"}</button>
         </div>
         {error && <p className="error">{error}</p>}

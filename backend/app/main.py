@@ -130,8 +130,11 @@ def health():
         "ffmpeg": Path(settings.ffmpeg).name if shutil.which(settings.ffmpeg) or Path(settings.ffmpeg).exists() else None,
         "remotion": remotion_available(), "renderer": settings.renderer,
         "skellysync": Path(settings.skellysync_python).exists(),
-        "vlm": {"provider": settings.vlm_provider, "model": settings.vlm_model, "base_url": settings.vlm_base_url},
-        "llm": settings.llm_provider, "tts": {"provider": settings.tts_provider, "voice": settings.tts_voice},
+        # Report what actually runs: any VLM_PROVIDER other than "openai" means offline mock analysis.
+        "vlm": {"provider": settings.vlm_provider, "model": settings.vlm_model, "base_url": settings.vlm_base_url}
+               if settings.vlm_provider == "openai" else {"provider": "mock", "model": None, "base_url": None},
+        "llm": settings.llm_provider, "tts": {"provider": settings.tts_provider,
+                "voice": settings.tts_edge_voice if settings.tts_provider == "edge" else settings.tts_voice},
         "extras": extras,
     }
 

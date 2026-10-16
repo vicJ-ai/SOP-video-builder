@@ -34,6 +34,8 @@ export function ProjectPage({ id, tab: urlTab }: { id: string; tab: Tab | null }
   const [p, setP] = useState<Project | null>(null);
   const [error, setError] = useState("");
   const [pollUntil, setPollUntil] = useState(0);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const refresh = useCallback((next?: Project) => {
     if (next) {
@@ -57,6 +59,18 @@ export function ProjectPage({ id, tab: urlTab }: { id: string; tab: Tab | null }
     try { await api.run(id, from); } catch (e) { setError(String((e as Error).message)); }
     refresh();
   }, [id, refresh]);
+  const remove = useCallback(async () => {
+    setError("");
+    setDeleting(true);
+    try {
+      await api.remove(id);
+      window.location.hash = "#/";
+    } catch (e) {
+      setError(String((e as Error).message));
+      setDeleting(false);
+      setConfirmDelete(false);
+    }
+  }, [id]);
 
   if (!p) return <div className="page"><p className="muted">{error || "Loading…"}</p></div>;
   const tab = urlTab ?? suggestedTab(p);
@@ -77,6 +91,15 @@ export function ProjectPage({ id, tab: urlTab }: { id: string; tab: Tab | null }
             <span className={`status ${st.tone}`}><span className="dot" />{st.label}</span>
             {!p.running && !waiting && (failed || stale) &&
               <button className="secondary" onClick={() => rerun()}>{failed ? "Retry" : "Apply changes"}</button>}
+            {confirmDelete ? (
+              <span className="row delete-confirm">
+                <span className="small">{p.running ? "Delete when it finishes?" : "Delete this video?"}</span>
+                <button className="secondary" onClick={() => setConfirmDelete(false)} disabled={deleting}>Cancel</button>
+                <button className="danger" onClick={remove} disabled={deleting}>{deleting ? "Deleting…" : "Delete"}</button>
+              </span>
+            ) : (
+              <button className="secondary delete-video" onClick={() => setConfirmDelete(true)}>Delete</button>
+            )}
           </div>
         </div>
         <div className="progress-strip" title={`${done} of ${p.stage_order.length} steps complete`}>

@@ -95,6 +95,10 @@ button.primary, .button.primary { background: var(--primary); color: var(--prima
 button.primary:hover:not(:disabled), .button.primary:hover { background: var(--g09); border-color: var(--g09); }
 :root[data-theme="dark"] button.primary:hover:not(:disabled), :root[data-theme="dark"] .button.primary:hover { background: #fff; border-color: #fff; }
 button.secondary { background: var(--surface); border-color: var(--line); }
+button.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+button.danger:hover:not(:disabled) { border-color: var(--bad); filter: brightness(0.92); }
+.delete-video:hover:not(:disabled) { color: var(--bad); border-color: var(--bad); }
+.delete-confirm { gap: 8px; flex-wrap: wrap; }
 button.lg, .big-btn { padding: 12px 24px; font-size: 15px; }
 button.link { border: 0; background: none; color: var(--accent-strong); padding: 0 4px; font-weight: 700; }
 button.link:hover:not(:disabled) { text-decoration: underline; }

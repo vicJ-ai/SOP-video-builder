@@ -66,6 +66,11 @@ class Settings:
     tts_api_key: str = field(default_factory=lambda: _env("TTS_API_KEY", "EMPTY"))
     tts_model: str = field(default_factory=lambda: _env("TTS_MODEL", "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"))
     tts_voice: str = field(default_factory=lambda: _env("TTS_VOICE", "Ryan"))  # fixed approved preset voice
+    # Edge neural voice (TTS_PROVIDER=edge) has its own preset; TTS_VOICE stays for the other providers.
+    tts_edge_voice: str = field(default_factory=lambda: _env("TTS_EDGE_VOICE", "en-US-JennyNeural"))
+    tts_edge_rate: str = field(default_factory=lambda: _env("TTS_EDGE_RATE", "+0%"))
+    tts_edge_pitch: str = field(default_factory=lambda: _env("TTS_EDGE_PITCH", "+0Hz"))
+    tts_edge_volume: str = field(default_factory=lambda: _env("TTS_EDGE_VOLUME", "+0%"))
 
     asr_model: str = field(default_factory=lambda: _env("ASR_MODEL", "small"))
 
