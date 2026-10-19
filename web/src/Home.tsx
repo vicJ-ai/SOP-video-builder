@@ -1,135 +1,31 @@
-import { useRef, useState } from "react";
-import { api, type Summary } from "./api";
-
-type Slot = "physical" | "system" | "sop";
-const SLOTS: { key: Slot; n: string; label: string; hint: string; accept: string; tone: string }[] = [
-  { key: "physical", n: "01", label: "Floor recording", hint: "The physical work, filmed on the floor", accept: "video/*", tone: "red" },
-  { key: "system", n: "02", label: "WISE recording", hint: "The screen recording of the system", accept: "video/*", tone: "blue" },
-  { key: "sop", n: "03", label: "SOP document", hint: "The procedure as a Markdown (.md) file", accept: ".md,.markdown,text/markdown", tone: "green" },
-];
-
-const STEPS = [
-  ["Sync", "Both recordings are aligned on their shared audio and verified at the start, middle and end."],
-  ["Edit & review", "Describe actions, match them to SOP steps and preview narration live — nothing to approve."],
-  ["Render", "One click renders the narrated, captioned video with an SOP coverage report."],
-];
-
-function DropSlot({ slot, file, onFile }: { slot: (typeof SLOTS)[number]; file: File | null; onFile: (f: File) => void }) {
-  const input = useRef<HTMLInputElement>(null);
-  const [over, setOver] = useState(false);
-  return (
-    <button
-      type="button"
-      className={`drop tone-${slot.tone} ${over ? "over" : ""} ${file ? "filled" : ""}`}
-      onClick={() => input.current?.click()}
-      onDragOver={(e) => { e.preventDefault(); setOver(true); }}
-      onDragLeave={() => setOver(false)}
-      onDrop={(e) => { e.preventDefault(); setOver(false); const f = e.dataTransfer.files[0]; if (f) onFile(f); }}
-    >
-      <span className="drop-top">
-        <span className="drop-n">{slot.n}</span>
-        <span className="drop-label">{slot.label}</span>
-      </span>
-      <span className="drop-body">
-        {file
-          ? <><span className="drop-file">{file.name}</span><span className="muted small">{(file.size / 1e6).toFixed(1)} MB · click to change</span></>
-          : <><span className="drop-cta">Drop file or browse</span><span className="muted small">{slot.hint}</span></>}
-      </span>
-      <span className="drop-bar" aria-hidden />
-      <input ref={input} type="file" hidden accept={slot.accept} onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} />
-    </button>
-  );
-}
-
-export function Home({ projects }: { projects: Summary[] }) {
-  const [files, setFiles] = useState<Record<Slot, File | null>>({ physical: null, system: null, sop: null });
-  const [title, setTitle] = useState("");
-  const [autoApprove, setAutoApprove] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const ready = files.physical && files.system && files.sop;
-  const count = Object.values(files).filter(Boolean).length;
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!ready) return;
-    setBusy(true);
-    setError("");
-    const form = new FormData();
-    form.set("title", title || files.sop!.name.replace(/\.(md|markdown)$/i, ""));
-    form.set("physical", files.physical!);
-    form.set("system", files.system!);
-    form.set("sop", files.sop!);
-    form.set("auto_approve", String(autoApprove));
-    try {
-      const p = await api.create(form);
-      window.location.hash = `#/p/${p.id}`;
-    } catch (err) {
-      setError(String((err as Error).message));
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="page home">
-      <header className="hero">
-        <div className="eyebrow">UNIS · Training</div>
-        <h1>Turn a process into a<br />training video.</h1>
-        <p className="lead">Upload the floor recording, the WISE screen recording and the SOP. The builder syncs them,
-          maps every action to the procedure and produces a narrated, captioned video.</p>
-      </header>
-
-      <form className="upload" onSubmit={submit}>
-        <div className="section-head">
-          <h2>New SOP video</h2>
-          <span className="muted">{count}/3 files</span>
-        </div>
-        <div className="drops">
-          {SLOTS.map((s) => (
-            <DropSlot key={s.key} slot={s} file={files[s.key]} onFile={(f) => setFiles({ ...files, [s.key]: f })} />
-          ))}
-        </div>
-        <div className="upload-actions">
-          <label className="field grow">
-            <span>Process title</span>
-            <input placeholder="Defaults to the SOP title" value={title} onChange={(e) => setTitle(e.target.value)} />
-          </label>
-          <label className="checkbox"><input type="checkbox" checked={autoApprove} onChange={(e) => setAutoApprove(e.target.checked)} />
-            Render automatically (skip review)</label>
-          <button className="primary lg" disabled={!ready || busy}>{busy ? "Uploading…" : "Upload & start"}</button>
-        </div>
-        {error && <p className="error">{error}</p>}
-        <p className="muted small">Original files are kept unchanged. Footage outside the shared recording time is flagged, never silently discarded.</p>
-      </form>
-
-      <section className="how">
-        {STEPS.map(([t, d], i) => (
-          <div key={t} className="how-item">
-            <span className="how-n">{String(i + 1).padStart(2, "0")}</span>
-            <h3>{t}</h3>
-            <p className="muted">{d}</p>
-          </div>
-        ))}
-      </section>
-
-      {projects.length > 0 && (
-        <section>
-          <div className="section-head"><h2>Recent projects</h2></div>
-          <div className="project-grid">
-            {projects.slice(0, 6).map((p) => (
-              <a key={p.id} href={`#/p/${p.id}`} className="project-card">
-                <span className={`status ${p.running ? "running" : p.current_state}`}>
-                  <span className="dot" />{p.running ? "Working" : p.current_state === "awaiting_review" ? "Ready for review"
-                    : p.current_state === "done" ? "Complete" : p.current_state === "failed" ? "Needs attention" : "In progress"}
-                </span>
-                <strong>{p.title}</strong>
-                <span className="bar"><span style={{ width: `${Math.round(p.progress * 100)}%` }} /></span>
-                <span className="muted small">Updated {new Date(p.updated_at).toLocaleString()}</span>
-              </a>
-            ))}
-          </div>
-        </section>
-      )}
-    </div>
-  );
+import {useEffect,useState} from "react";
+import {api,type Summary} from "./api";
+// The token-free pipeline needs the floor recording, the WISE screen recording and the SOP.
+const LABEL=["Floor","WISE"];
+function stateLabel(p:Summary){if(p.running)return p.current?`${p.current.replace(/_/g," ")}…`:"working…";return({done:"ready",failed:"needs attention",awaiting_review:"ready to render",stale:"changes pending",pending:"not started"} as Record<string,string>)[p.current_state]??p.current_state;}
+export function Home(){
+ const [projects,setProjects]=useState<Summary[]>([]),[files,setFiles]=useState<File[]>([]),[sop,setSop]=useState<File|null>(null),[title,setTitle]=useState(""),[error,setError]=useState(""),[fileNotice,setFileNotice]=useState(""),[dragging,setDragging]=useState(false),[busy,setBusy]=useState(false);
+ const [confirming,setConfirming]=useState(""),[deleting,setDeleting]=useState("");
+ async function remove(id:string){setDeleting(id);setError("");try{await api.remove(id);setProjects(prev=>prev.filter(p=>p.id!==id));setConfirming("");}catch(err){setError((err as Error).message);}finally{setDeleting("");}}
+ useEffect(()=>{api.list().then(setProjects).catch(e=>setError(e.message));},[]);
+ useEffect(()=>{if(!projects.some(p=>p.running))return;const t=window.setTimeout(()=>api.list().then(setProjects).catch(()=>{}),3000);return()=>window.clearTimeout(t);},[projects]);
+ const ready=files.length===2&&!!sop,inferredTitle=title.trim()||sop?.name.replace(/\.(md|markdown)$/i,"").replace(/[_-]+/g," ")||"Observed workflow";
+ function addFiles(list:FileList|File[]|null){
+  if(!list)return;
+  const incoming=Array.from(list),videos=incoming.filter(f=>f.type.startsWith("video/")||/\.(mp4|mov|mkv|webm|avi|m4v)$/i.test(f.name)),docs=incoming.filter(f=>/\.(md|markdown)$/i.test(f.name)),invalid=incoming.filter(f=>!videos.includes(f)&&!docs.includes(f));
+  setFileNotice(invalid.length?`Unsupported file${invalid.length>1?"s":""}: ${invalid.map(f=>f.name).join(", ")}. Add MP4, MOV, MKV, or a Markdown (.md) SOP.`:videos.length+files.length>2?"Only two recordings are used: the floor recording first, then the WISE screen recording.":"");
+  setFiles(prev=>{const known=new Set(prev.map(f=>`${f.name}:${f.size}:${f.lastModified}`));const fresh=videos.filter(f=>!known.has(`${f.name}:${f.size}:${f.lastModified}`));return [...prev,...fresh].slice(0,2);});
+  if(docs[0])setSop(docs[0]);
+ }
+ function onDrop(e:React.DragEvent){e.preventDefault();setDragging(false);addFiles(Array.from(e.dataTransfer.files));}
+ async function submit(e:React.FormEvent){e.preventDefault();setError("");if(!ready){setError("Add the floor recording, the WISE recording and the SOP (.md) to begin.");return;}setBusy(true);const form=new FormData();form.set("title",inferredTitle);form.set("physical",files[0]);form.set("system",files[1]);form.set("sop",sop!);form.set("auto_start","true");form.set("auto_approve","true");try{const project=await api.create(form);window.location.hash=`/p/${project.id}`;}catch(err){setError((err as Error).message);}finally{setBusy(false);}}
+ const missing=[files.length<1&&"floor recording",files.length<2&&"WISE recording",!sop&&"SOP (.md)"].filter(Boolean);
+ return <div className="home studio-home"><div className="page-heading"><div><div className="eyebrow">ITEM VIDEO STUDIO</div><h1>Upload once.<br/>Get the walkthrough.</h1><p className="muted">Drop the floor recording, the WISE screen recording and the SOP, then Generate video.</p></div></div>
+ <section className="card intake" id="intake"><div className="eyebrow">NEW VIDEO</div><h2>What should Item turn into a video?</h2><form onSubmit={submit}><label className={`drop upload-drop ${files.length?"filled":""} ${dragging?"dragging":""}`} htmlFor="footage" role="button" tabIndex={0} aria-describedby="drop-help" onDragEnter={e=>{e.preventDefault();setDragging(true)}} onDragOver={e=>e.preventDefault()} onDragLeave={e=>{e.preventDefault();setDragging(false)}} onDrop={onDrop} onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();document.getElementById("footage")?.click()}}}><strong>{ready?"Ready to generate":dragging?"Release to add files":"Drop recordings and SOP here"}</strong><span id="drop-help" className="muted small">Floor video, WISE video and the SOP .md · you can drop them together</span><input id="footage" type="file" multiple accept="video/*,.mp4,.mov,.mkv,.webm,.md,.markdown" onChange={e=>{addFiles(e.target.files);e.target.value="";}}/></label>
+ {fileNotice&&<div className="banner error" role="alert">{fileNotice}</div>}
+ {(files.length>0||sop)&&<div className="file-chips">{files.map((f,i)=><button type="button" className="file-chip" key={`${f.name}-${i}`} title="Remove" onClick={()=>setFiles(files.filter((_,j)=>j!==i))}><span>{LABEL[i]}</span> {f.name} ×</button>)}{files.length===2&&<button type="button" className="file-chip" title="Swap which video is the floor and which is WISE" onClick={()=>setFiles([files[1],files[0]])}>⇄ Swap</button>}{sop&&<button type="button" className="file-chip" title="Remove" onClick={()=>setSop(null)}><span>SOP</span> {sop.name} ×</button>}</div>}
+ <details><summary>Advanced options</summary><div className="advanced-options"><label className="field">Process name<input value={title} onChange={e=>setTitle(e.target.value)} placeholder={inferredTitle}/></label></div></details>
+ {error&&<div className="banner error" role="alert">{error}</div>}<div className="row between generate-row"><span className="muted small">{missing.length?`Still needed: ${missing.join(", ")}`:"Item opener → title → real work → complete outro"}</span><button className="primary generate" disabled={busy||!ready}>{busy?"Uploading…":"Generate video →"}</button></div></form></section>
+ <section className="card how-it-works"><div><div className="eyebrow">AUTOMATIC CHECKS</div><h3>We handle the technical work</h3><p className="muted">The studio syncs the two recordings, maps the work to your SOP, writes and voices the narration, captions it and checks the export. If something needs attention, you’ll get a clear message with a next action.</p></div><div className="step-list"><span>01 Upload</span><span>02 Sync & map</span><span>03 Voice & render</span><span>04 Play & download</span></div></section>
+ <section className="card"><div className="row between"><div><div className="eyebrow">YOUR VIDEOS</div><h2>Finished and in progress</h2></div><span className="muted small">{projects.length} local video{projects.length===1?"":"s"}</span></div>{projects.length?<div className="project-list">{projects.map(p=><div className="project-row" key={p.id}><a className="project-link" href={`#/p/${p.id}`}><span className="project-icon">▷</span><div className="grow"><b>{p.title}</b><div className="muted small">paired · {new Date(p.updated_at).toLocaleDateString()}</div></div><span className="pill">{stateLabel(p)}</span><span>→</span></a>{confirming===p.id?<span className="delete-confirm"><span className="small">{p.running?"Delete when it finishes?":"Delete this video?"}</span><button type="button" onClick={()=>setConfirming("")} disabled={deleting===p.id}>Cancel</button><button type="button" className="danger" onClick={()=>remove(p.id)} disabled={deleting===p.id}>{deleting===p.id?"Deleting…":"Delete"}</button></span>:<button type="button" className="delete-video" aria-label={`Delete ${p.title}`} title="Delete video" onClick={()=>setConfirming(p.id)}>Delete</button>}</div>)}</div>:<p className="muted">Your generated videos will appear here.</p>}</section></div>;
 }

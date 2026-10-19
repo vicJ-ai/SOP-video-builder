@@ -40,6 +40,15 @@ def build_captions(cues: list[NarrationCue]) -> list[Caption]:
             end = cue.out_end_ms if i == len(pages) - 1 else t + round((cue.out_end_ms - cue.out_start_ms) * len(pg) / total_chars)
             out.append(Caption(index=len(out) + 1, cue_id=cue.id, start_ms=t, end_ms=end, text=pg))
             t = end
+        if cue.from_frame is not None and cue.end_frame is not None:
+            # Page boundaries on the cue's own frame schedule, so burned and sidecar captions match exactly.
+            cursor = cue.from_frame
+            for i, cap in enumerate(out[-len(pages):]):
+                boundary = cue.end_frame if i == len(pages) - 1 else min(
+                    cue.end_frame, cursor + max(1, round((cue.end_frame - cue.from_frame) * len(pages[i]) / total_chars)))
+                cap.from_frame, cap.end_frame = cursor, boundary
+                cap.start_ms, cap.end_ms = round(cursor * 1000 / 30), round(boundary * 1000 / 30)
+                cursor = boundary
     return out
 
 

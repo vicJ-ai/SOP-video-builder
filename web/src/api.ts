@@ -29,7 +29,7 @@ export interface Cue {
   schedule_notes: string[]; dropped: boolean;
 }
 export interface QACheck { name: string; ok: boolean; detail: string; severity: "error" | "warning" | "info" }
-export interface Segment { kind: "intro" | "source"; out_start_ms: number; out_end_ms: number; shared_start_ms: number }
+export interface Segment { kind: "intro" | "title" | "source" | "outro"; out_start_ms: number; out_end_ms: number; shared_start_ms: number }
 
 export interface Project {
   id: string; title: string; created_at: string; updated_at: string;
@@ -96,6 +96,7 @@ export const api = {
   editCoverage: (id: string, step: string, human_override: Evidence | null) =>
     req<Project>("PATCH", `${P(id)}/coverage/${step}`, { human_override }),
   renderFinal: (id: string) => req<Project>("POST", `${P(id)}/approve`),
+  feedback: (id: string, text: string) => req<{ ok: boolean }>("POST", `${P(id)}/feedback`, { text }),
   file: (id: string, path: string, bust?: string) => `${P(id)}/files/${path}${bust ? `?v=${encodeURIComponent(bust)}` : ""}`,
   download: (id: string) => `${P(id)}/download`,
 };

@@ -1,0 +1,47 @@
+{
+  "version": "item-v1-black-matte-cfr30",
+  "assets": {
+    "llms-full.txt": {
+      "url": "https://design.item.com/llms-full.txt",
+      "sha256": "4efd26e557859dde7d2d9aeb10a8d9bd4ccc2056348d3c6d334bdf23c067aae6"
+    },
+    "intro-item-logo.mp4": {
+      "url": "https://cdn.item.com/design/video/brand/intro-item-logo.mp4",
+      "sha256": "b18c5365da564a24cf6fe7a6c0f344bdb1f54944e5a5b04cf3101c689d13139a"
+    },
+    "outro-item-logo.mp4": {
+      "url": "https://cdn.item.com/design/video/brand/outro-item-logo.mp4",
+      "sha256": "0e6ce30d1dae5e76376d7bd839af2201b437d276b04911bce9e0d018fc31cde4"
+    },
+    "item-logo.svg": {
+      "source": "approved local Item brand reference",
+      "sha256": "b0db5ccc7c3445a3e059cf76cf0605e7f7dadd3783a3e94f83e5302d4acce704"
+    },
+    "Satoshi-400.woff2": {
+      "source": "approved local Item font reference",
+      "sha256": "50dca57f0b77918e0fb7dac998c3f5ef6b0c2a29657da97658a04f98ac532fc5"
+    },
+    "Satoshi-500.woff2": {
+      "source": "approved local Item font reference",
+      "sha256": "af02a72246f53ad49c44a591921edbd39ec8258a03d8cc2e0532aa1e497e85b4"
+    },
+    "Satoshi-700.woff2": {
+      "source": "approved local Item font reference",
+      "sha256": "353a7fbfb4475f0c31470a7449226006cb64211c71055ca9db860a8acdaa9f68"
+    },
+    "intro-normalized.mp4": {
+      "policy": "item-v1-black-matte-cfr30",
+      "frames": 152,
+      "source_sar": "71:80",
+      "source_dar": "71:45",
+      "sha256": "4f051d97c2f293928296bac6f1f312d0f92e73d29016db0541f37a60ed7b9bf4"
+    },
+    "outro-normalized.mp4": {
+      "policy": "item-v1-black-matte-cfr30",
+      "frames": 126,
+      "source_sar": "1:1",
+      "source_dar": "16:9",
+      "sha256": "0f00b46c88055197a43109a701f9694e4bd08607f3b5751ebef47ed147581b06"
+    }
+  }
+}

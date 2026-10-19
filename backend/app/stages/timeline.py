@@ -18,6 +18,7 @@ def _inputs(p):
     return {
         "lag": p.sync.lag_ms, "start": p.sync.shared_start_physical_ms, "dur": p.sync.shared_duration_ms,
         "intro": p.timeline.intro_ms, "cuts": [c.model_dump() for c in p.timeline.cuts],
+        "title": p.timeline.title_ms, "outro": p.timeline.outro_ms,
     }
 
 
@@ -37,12 +38,22 @@ def build_segments(timeline: Timeline, shared_duration_ms: int) -> None:
     if timeline.intro_ms > 0:
         segments.append(Segment(kind="intro", out_start_ms=0, out_end_ms=timeline.intro_ms))
         out = timeline.intro_ms
+    if timeline.title_ms:
+        segments.append(Segment(kind="title", out_start_ms=out, out_end_ms=out + timeline.title_ms))
+        out += timeline.title_ms
     cursor = 0
     for s, e in merged + [[shared_duration_ms, shared_duration_ms]]:
         if s > cursor:
             segments.append(Segment(kind="source", out_start_ms=out, out_end_ms=out + s - cursor, shared_start_ms=cursor))
             out += s - cursor
         cursor = max(cursor, e)
+    if timeline.outro_ms:
+        segments.append(Segment(kind="outro", out_start_ms=out, out_end_ms=out + timeline.outro_ms))
+        out += timeline.outro_ms
+    # Resolve every boundary once on the 30 fps frame grid shared by renderer and captions.
+    for seg in segments:
+        seg.from_frame = round(seg.out_start_ms * 30 / 1000)
+        seg.duration_frames = round(seg.out_end_ms * 30 / 1000) - seg.from_frame
     timeline.segments = segments
     timeline.duration_ms = out
 
@@ -82,9 +93,9 @@ def _export_otio(ctx: Ctx, path) -> bool:
             available_range=otio.opentime.TimeRange(rt(0), rt(media.duration_ms)),
         )
         for seg in p.timeline.segments:
-            if seg.kind == "intro":
+            if seg.kind != "source":
                 track.append(otio.schema.Gap(source_range=otio.opentime.TimeRange(rt(0), rt(seg.duration_ms)),
-                                             name="intro"))
+                                             name=seg.kind))
                 continue
             start = p.sync.physical_ms(seg.shared_start_ms) if role == "physical" else p.sync.system_ms(seg.shared_start_ms)
             track.append(otio.schema.Clip(name=f"{role}@{seg.shared_start_ms}", media_reference=ref.clone(),
@@ -111,4 +122,4 @@ def run(ctx: Ctx) -> str:
             f"({p.sync.shared_duration_ms - cut_ms} ms cut){'' if otio_ok else ' — OTIO not installed'}")
 
 
-STAGE = Stage("timeline", "Canonical timeline", "1", _inputs, run)
+STAGE = Stage("timeline", "Canonical timeline", "2", _inputs, run)

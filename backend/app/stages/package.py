@@ -118,7 +118,7 @@ def run(ctx: Ctx) -> str:
     # poster + compact version
     poster_at = p.layout[0].out_start_ms + 1500 if p.layout else p.timeline.duration_ms // 2
     extract_frame(final, poster_at, out / "poster.jpg")
-    ffmpeg("-i", str(final), "-vf", "scale=-2:720", "-c:v", "libx264", "-preset", "medium", "-crf", "26",
+    ffmpeg("-i", str(final), "-vf", "scale=-2:720", "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
            "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", str(out / "final_720p.mp4"))
 
     # provenance manifest

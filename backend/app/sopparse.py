@@ -61,6 +61,28 @@ def expected_view(text: str) -> str:
     return "system" if s else "physical" if p else "both"
 
 
+PURPOSE_RE = re.compile(r"^\s*(?:\*\*|__)?(?:Purpose|Objective|Overview|Introduction)\.?:?(?:\*\*|__)?\s*[.:]?\s*(?P<text>.*)$", re.I)
+
+
+def parse_intro(markdown: str) -> str:
+    """The SOP's introduction: a 'Purpose.' line or the paragraph under a Purpose/Overview heading."""
+    lines = markdown.splitlines()
+    for i, line in enumerate(lines):
+        heading = HEADING_RE.match(line)
+        if heading and (hm := PURPOSE_RE.match(plain(heading["text"]))) and not hm["text"].strip():
+            body = []
+            for nxt in lines[i + 1:]:
+                if HEADING_RE.match(nxt) or (body and not nxt.strip()):
+                    break
+                if nxt.strip():
+                    body.append(plain(nxt.strip()))
+            if body:
+                return " ".join(body)
+        if not heading and (m := PURPOSE_RE.match(line)) and m["text"].strip():
+            return plain(m["text"].strip())
+    return ""
+
+
 def parse_sop(markdown: str) -> tuple[str, list[SopStep]]:
     title = ""
     section = ""

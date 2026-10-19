@@ -52,6 +52,10 @@ class Settings:
     vlm_fine_fps: float = field(default_factory=lambda: float(_env("VLM_FINE_FPS", "6")))
     vlm_chunk_s: float = field(default_factory=lambda: float(_env("VLM_CHUNK_S", "30")))
     vlm_max_frames: int = field(default_factory=lambda: int(_env("VLM_MAX_FRAMES", "32")))
+    # Fine pass: how many short candidate windows get a second, denser look (0 = coarse pass only).
+    vlm_fine_max_windows: int = field(default_factory=lambda: int(_env("VLM_FINE_MAX_WINDOWS", "80")))
+    # Hard cap on model calls per analysis run (anthropic provider).
+    ai_max_calls: int = field(default_factory=lambda: int(_env("AI_MAX_CALLS", "12")))
     mock_events_path: str = field(default_factory=lambda: _env("MOCK_EVENTS_PATH"))
 
     # Text LLM for SOP matching refinement and narration polishing (optional; deterministic otherwise).
@@ -83,6 +87,8 @@ class Settings:
     renderer: str = field(default_factory=lambda: _env("RENDERER", "remotion"))  # remotion | ffmpeg
     render_dir: Path = field(default_factory=lambda: REPO_ROOT / "render")
     render_concurrency: str = field(default_factory=lambda: _env("RENDER_CONCURRENCY", "50%"))
+    # Versioned official Item bookends, logo and fonts (hash-checked against manifest.json).
+    brand_dir: Path = field(default_factory=lambda: Path(_env("ITEM_BRAND_DIR") or REPO_ROOT / "assets" / "item-v1"))
 
     fps: int = 30
 

@@ -7,6 +7,9 @@ from .openai_compat import ChatClient
 
 
 def get_llm() -> ChatClient | None:
+    if settings.llm_provider == "anthropic":
+        from .anthropic_client import ClaudeClient
+        return ClaudeClient(settings.llm_api_key, settings.llm_model)
     if settings.llm_provider != "openai":
         return None
     return ChatClient(settings.llm_base_url, settings.llm_api_key, settings.llm_model)

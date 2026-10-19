@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import bisect
 import json
+import os
 import re
 import subprocess
 from fractions import Fraction
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -69,6 +72,9 @@ def describe(path: Path) -> dict:
 
 # Messages about container timestamps, not damaged media. Phone / screen recordings with a variable
 # frame rate routinely produce them; the CFR proxy normalises the timing without changing speed.
+# GPU video decoding where available (about 2x faster on 4K HEVC); FFmpeg falls back to software itself.
+HWACCEL = ["-hwaccel", "d3d11va"] if os.name == "nt" else ["-hwaccel", "auto"]
+
 _BENIGN = re.compile(
     r"non monotonically increasing dts|non-monotonous dts|Last message repeated|"
     r"Past duration .* too large|DTS .* < .* out of order|Timestamps are unset|"
@@ -77,7 +83,7 @@ _BENIGN = re.compile(
 
 def decode_errors(path: Path, *, seconds: float | None = None) -> list[str]:
     """Full strict decode. Fails early on corrupt uploads before any expensive analysis."""
-    args = [settings.ffmpeg, "-hide_banner", "-nostdin", "-v", "error"]
+    args = [settings.ffmpeg, "-hide_banner", "-nostdin", "-v", "error", *HWACCEL]
     if seconds:
         args += ["-t", str(seconds)]
     args += ["-i", str(path), "-map", "0:v:0", "-map", "0:a:0?", "-f", "null", "-"]
@@ -124,10 +130,35 @@ def gray_frames(
     return np.frombuffer(raw[: n * width * height], dtype=np.uint8).reshape(n, height, width)
 
 
+@lru_cache(maxsize=32)
+def _frame_times(path: str, mtime_ns: int, size: int) -> tuple[float, ...]:
+    proc = run([settings.ffprobe, "-v", "error", "-show_entries", "format=start_time", "-select_streams", "v:0",
+                "-show_entries", "packet=pts_time", "-of", "json", path])
+    data = json.loads(proc.stdout)
+    start = float((data.get("format") or {}).get("start_time") or 0)
+    return tuple(sorted(float(p["pts_time"]) - start for p in data.get("packets", []) if p.get("pts_time") not in (None, "N/A")))
+
+
+def frame_times(path: Path) -> tuple[float, ...]:
+    """Presentation time (s, from file start) of every video frame. Cached per file version."""
+    stat = path.stat()
+    return _frame_times(str(path), stat.st_mtime_ns, stat.st_size)
+
+
 def extract_frame(path: Path, at_ms: int, out: Path, *, max_width: int | None = None) -> Path:
+    """The frame on screen at ``at_ms``: the latest frame at or before it.
+
+    Phone screen recorders only write a frame when the screen changes, so a time can fall in a
+    multi-second gap or after the last frame; plain seeking returns the next frame or nothing there.
+    """
     out.parent.mkdir(parents=True, exist_ok=True)
     vf = f"scale='min({max_width},iw)':-2" if max_width else "null"
-    ffmpeg("-ss", f"{max(at_ms, 0) / 1000:.3f}", "-i", str(path), "-frames:v", "1", "-vf", vf, "-q:v", "2", str(out))
+    at = max(at_ms, 0) / 1000
+    times = frame_times(path)
+    if times:
+        shown = times[max(bisect.bisect_right(times, at + 1e-6) - 1, 0)]
+        at = max(shown - 0.0005, 0)
+    ffmpeg("-ss", f"{at:.4f}", "-i", str(path), "-frames:v", "1", "-vf", vf, "-q:v", "2", str(out))
     return out
 
 
@@ -138,11 +169,13 @@ def make_proxy(src: Path, out: Path, *, fps: int) -> None:
     """Constant-frame-rate H.264 proxy. Keeps timestamps (no speed change), keeps audio."""
     out.parent.mkdir(parents=True, exist_ok=True)
     fit = (f"scale='if(gte(iw,ih),min({PROXY_MAX},iw),-2)':'if(gte(iw,ih),-2,min({PROXY_MAX},ih))'"
-           ":flags=lanczos,setsar=1")
+           ":flags=bicubic,setsar=1")
     ffmpeg(
-        "-i", str(src), "-map", "0:v:0", "-map", "0:a:0?", "-vf", fit,
+        *HWACCEL, "-i", str(src), "-map", "0:v:0", "-map", "0:a:0?", "-vf", fit,
         "-fps_mode", "cfr", "-r", str(fps),
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-g", str(fps),
+        # one keyframe per second and no B-frames: the renderer seeks into these proxies at every segment
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+        "-g", str(fps), "-keyint_min", str(fps), "-sc_threshold", "0", "-bf", "0",
         "-c:a", "aac", "-b:a", "160k", "-ar", "48000",
         "-movflags", "+faststart", str(out),
     )

@@ -62,8 +62,8 @@ class Vlm:
 class OpenAIVlm(Vlm):
     name = "openai"
 
-    def __init__(self):
-        self.client = ChatClient(settings.vlm_base_url, settings.vlm_api_key, settings.vlm_model)
+    def __init__(self, client=None):
+        self.client = client or ChatClient(settings.vlm_base_url, settings.vlm_api_key, settings.vlm_model)
 
     def available(self) -> bool:
         return True
@@ -87,4 +87,9 @@ class OpenAIVlm(Vlm):
 
 
 def get_vlm() -> Vlm:
+    if settings.vlm_provider == "anthropic":
+        from .anthropic_client import ClaudeClient
+        provider = OpenAIVlm(ClaudeClient(settings.vlm_api_key, settings.vlm_model))
+        provider.name = "anthropic"
+        return provider
     return OpenAIVlm() if settings.vlm_provider == "openai" else Vlm()

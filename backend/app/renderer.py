@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
+import time
 from pathlib import Path
+from typing import Callable
 
 from .config import settings
 from .media import MediaError, describe, ffmpeg
@@ -29,22 +32,49 @@ def _remotion_bin() -> list[str]:
     return ["node", str(cli)]
 
 
+# Remotion's non-TTY progress lines, e.g. "Rendering frames  ━━━━  1234/5286  2m 10s remaining"
+_PROGRESS = re.compile(r"(Rendering frames|Encoding video|Encoded|Rendered)\D*?(\d+)/(\d+)(?:.*?([\dhms ]+) remaining)?")
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def parse_progress(line: str) -> tuple[str, int, int, str] | None:
+    """(phase, done, total, eta) from one Remotion progress line, or None."""
+    m = _PROGRESS.search(_ANSI.sub("", line))
+    if not m:
+        return None
+    phase = "encoding" if m.group(1).startswith("Encod") else "rendering"
+    return phase, int(m.group(2)), int(m.group(3)), (m.group(4) or "").strip()
+
+
 def render_remotion(composition: str, props: dict, out: Path, *, public_dir: Path, scale: float = 1.0,
-                    log_path: Path | None = None) -> None:
+                    log_path: Path | None = None,
+                    on_progress: Callable[[str, int, int, str], None] | None = None) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     props_path = out.with_suffix(".props.json")
     props_path.write_text(json.dumps(props))
     args = [
         *_remotion_bin(), "render", "src/index.ts", composition, str(out),
         f"--props={props_path}", f"--public-dir={public_dir}", f"--concurrency={settings.render_concurrency}",
-        f"--scale={scale}", "--pixel-format=yuv420p", "--color-space=bt709", "--log=error", "--overwrite",
+        f"--scale={scale}", "--pixel-format=yuv420p", "--color-space=bt709", "--overwrite",
+        # info level prints progress lines (stdout is a pipe, so one line per update, not an overwriting bar)
+        "--log=info", "--x264-preset=veryfast", "--offthreadvideo-video-threads=4",
     ]
     env = {**os.environ, "PATH": f"{Path(settings.ffmpeg).parent}{os.pathsep}{os.environ.get('PATH', '')}"}
-    proc = subprocess.run(args, cwd=settings.render_dir, capture_output=True, env=env)
+    lines: list[str] = []
+    last_report = 0.0
+    with subprocess.Popen(args, cwd=settings.render_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                          env=env, text=True, encoding="utf-8", errors="replace") as proc:
+        for line in proc.stdout:
+            lines.append(line.rstrip())
+            parsed = parse_progress(line) if on_progress else None
+            if parsed and (time.monotonic() - last_report > 2 or parsed[1] == parsed[2]):
+                last_report = time.monotonic()
+                on_progress(*parsed)
+        proc.wait()
     if log_path:
-        log_path.write_bytes(proc.stdout + b"\n----\n" + proc.stderr)
+        log_path.write_text("\n".join(lines), encoding="utf-8")
     if proc.returncode != 0 or not out.exists():
-        raise MediaError(f"remotion render {composition} failed: {proc.stderr.decode(errors='replace')[-1500:]}")
+        raise MediaError(f"remotion render {composition} failed: {chr(10).join(lines)[-1500:]}")
     _normalise_output(out)
 
 
@@ -97,7 +127,7 @@ def render_preview_ffmpeg(physical: Path, system: Path, out: Path, *, phys_start
     ffmpeg(
         "-ss", f"{phys_start_ms/1000:.3f}", "-i", str(physical), "-ss", f"{sys_start_ms/1000:.3f}", "-i", str(system),
         "-t", f"{duration_ms/1000:.3f}", "-filter_complex", vf, "-map", "[v]", "-an",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
         str(out),
     )
 

@@ -21,6 +21,11 @@ from .store import Store, stable_hash
 
 log = logging.getLogger("pipeline")
 
+# Video rendering saturates the CPU and uses several GB of memory (one browser per concurrent frame),
+# so only one project renders at a time; others wait their turn with the earlier stages already done.
+HEAVY_STAGES = {"preview", "render"}
+_render_slot = threading.Semaphore(1)
+
 
 class Skip(Exception):
     """Stage cannot run in this environment (optional dependency missing, no audio, ...)."""
@@ -83,11 +88,11 @@ class Stage:
 def _registry() -> list[Stage]:
     from .stages import (
         analyze, captions, gates, narrate, normalize, ocr, package, preview, qa, render, sop, sync,
-        timeline, transcribe, tts, validate, windows,
+        timeline, title_voice, transcribe, tts, validate, windows,
     )
 
     return [
-        validate.STAGE, sop.PARSE, normalize.STAGE, sync.STAGE, timeline.STAGE, preview.STAGE,
+        validate.STAGE, sop.PARSE, title_voice.STAGE, normalize.STAGE, sync.STAGE, timeline.STAGE, preview.STAGE,
         transcribe.STAGE, windows.STAGE, analyze.STAGE, ocr.STAGE, sop.COMPARE, narrate.STAGE,
         tts.STAGE, captions.STAGE, gates.REVIEW, render.FINAL, qa.STAGE, package.STAGE,
     ]
@@ -177,10 +182,20 @@ class Runner:
                 continue
 
             status.state, status.started_at, status.message = "running", now_iso(), ""
+            heavy = stage.name in HEAVY_STAGES
+            if heavy and not _render_slot.acquire(blocking=False):
+                status.message = "Waiting for another video to finish rendering…"
+                self.store.save(project)
+                _render_slot.acquire()
+                status.started_at, status.message = now_iso(), ""
             self.store.save(project)
             t0 = time.monotonic()
             try:
-                msg = stage.run(ctx)
+                try:
+                    msg = stage.run(ctx)
+                finally:
+                    if heavy:
+                        _render_slot.release()
                 status.state, status.message = "done", msg or ""
             except Skip as exc:
                 status.state, status.message = "skipped", str(exc)

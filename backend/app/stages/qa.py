@@ -102,9 +102,11 @@ def run(ctx: Ctx) -> str:
     crossing = []
     for c in live:
         seg = p.timeline.segment_at_output(c.out_start_ms)
-        if seg is None or seg.kind != "source" or c.out_end_ms > seg.out_end_ms:
+        home = "title" if c.phase == "title" else "source"  # the title + introduction belongs on the title card
+        if seg is None or seg.kind != home or c.out_end_ms > seg.out_end_ms:
             crossing.append(c.id)
     check("no narration crosses a cut or the intro", not crossing, ", ".join(crossing[:5]))
+    live = [c for c in live if c.phase == "operational"]  # evidence checks apply to footage narration
     unsupported = []
     for c in live:
         e = p.event(c.event_id)

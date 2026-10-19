@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from ..models import Coverage, Discrepancy, Event, StepCoverage
 from ..pipeline import Ctx, Stage
 from ..providers.llm import get_llm
-from ..sopparse import parse_sop
+from ..sopparse import parse_intro, parse_sop
 from .ocr import text_present
 
 log = logging.getLogger(__name__)
@@ -34,13 +34,14 @@ def run_parse(ctx: Ctx) -> str:
     text = (ctx.originals / p.sop.filename).read_text(encoding="utf-8-sig")
     title, steps = parse_sop(text)
     p.sop.title = title or p.sop.title
+    p.sop.purpose = parse_intro(text)
     p.sop_steps = steps
     if not steps:
         raise ValueError("no steps found in the SOP — use a numbered list or 'Step N' headings")
     return f"{len(steps)} steps, {sum(len(s.controls) for s in steps)} named controls"
 
 
-PARSE = Stage("sop_parse", "Parse SOP", "2", _parse_inputs, run_parse)
+PARSE = Stage("sop_parse", "Parse SOP", "3", _parse_inputs, run_parse)
 
 
 # --------------------------------------------------------------------------- comparison
@@ -158,7 +159,7 @@ def _llm_refine(events: list[Event], steps, proposed: dict[str, str | None]) -> 
 
 
 def _transcript_near(p, e: Event) -> str:
-    seg = [s.text for s in p.transcript if s.end_ms >= e.start_ms - 1000 and s.start_ms <= e.end_ms + 1000]
+    seg = [s.text_en or s.text for s in p.transcript if s.end_ms >= e.start_ms - 1000 and s.start_ms <= e.end_ms + 1000]
     return " ".join(seg)[:400]
 
 
@@ -168,7 +169,7 @@ def _compare_inputs(p):
         "events": [e.model_dump(exclude={"sop_step_id", "evidence_status", "transcript_context", "narration"})
                    for e in p.events],
         "assigned": [[e.id, e.sop_step_id] for e in p.events if e.human_edited],
-        "transcript": [[s.start_ms, s.end_ms, s.text] for s in p.transcript],
+        "transcript": [[s.start_ms, s.end_ms, s.text_en or s.text] for s in p.transcript],
         "overrides": {c.step_id: c.human_override for c in p.coverage.steps if c.human_override},
     }
 
@@ -212,7 +213,8 @@ def run_compare(ctx: Ctx) -> str:
         evs = [e for e in events if e.sop_step_id == s.id]
         notes: list[str] = []
         if not evs:
-            spoken = [seg for seg in p.transcript if len(_tokens(s.text) & _tokens(seg.text)) >= max(2, len(_tokens(s.text)) // 2)]
+            spoken = [seg for seg in p.transcript  # English rendering: the SOP is English, speech may be Spanish
+                      if len(_tokens(s.text) & _tokens(seg.text_en or seg.text)) >= max(2, len(_tokens(s.text)) // 2)]
             if spoken:
                 status = "unclear"
                 notes.append("mentioned in speech but not visibly demonstrated")
