@@ -63,13 +63,15 @@ def run(ctx: Ctx) -> str:
         import paddleocr  # noqa: F401
         engine = "paddleocr"
     except ImportError:
-        engine = "vlm" if get_vlm().available() else ""
+        vlm = get_vlm()
+        # A paid model re-reading its own frames costs one call per event and verifies little; skip it.
+        engine = "vlm" if vlm.available() and vlm.name != "anthropic" else ""
     targets = [e for e in p.events if e.view in ("system", "both") and not e.rejected]
     if not engine:
         for e in targets:
             if e.visible_text and "visible text not OCR-verified" not in e.review_reasons:
                 e.review_reasons.append("visible text not OCR-verified")
-        raise Skip("no OCR engine (uv sync --extra ocr) and no VLM endpoint — text left unverified")
+        raise Skip("no OCR engine (uv sync --extra ocr) and no separate OCR model — text left unverified")
 
     vlm = get_vlm()
     checked = disagreements = 0

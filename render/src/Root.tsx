@@ -1,6 +1,7 @@
 import { Composition, type CalculateMetadataFunction } from "remotion";
 import { Final } from "./Final";
 import { Preview } from "./Preview";
+import {BrandAnimation, type BrandProps} from "./Brand";
 import type { FinalProps, PreviewProps } from "./types";
 
 const source = { src: "", width: 1920, height: 1080, label: "" };
@@ -45,6 +46,10 @@ const finalDefaults: FinalProps = {
 
 export const Root: React.FC = () => (
   <>
+    <Composition id="BrandPreflight" component={BrandAnimation}
+      defaultProps={{clip:"outro",frameCount:126} as BrandProps}
+      calculateMetadata={({props})=>({durationInFrames:props.frameCount})}
+      fps={30} width={1920} height={1080} durationInFrames={126}/>
     <Composition
       id="Preview"
       component={Preview}

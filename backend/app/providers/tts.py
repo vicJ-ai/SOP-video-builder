@@ -3,11 +3,14 @@
 * openai — Qwen3-TTS (or any server) exposing POST /v1/audio/speech, fixed approved preset voice
 * kokoro — Kokoro-82M locally on CPU (Apache-2.0), English fallback
 * system — the OS speech engine (Windows SAPI via pyttsx3) for quick offline drafts
+* edge   — Microsoft Edge neural voice (default Jenny); online, no API key (uv sync --extra neural-tts)
 * mock   — silence sized at ~2.6 words/s, for tests and dry runs
 """
 
 from __future__ import annotations
 
+import asyncio
+import re
 import subprocess
 from pathlib import Path
 
@@ -85,6 +88,44 @@ class SystemTts(Tts):
         _normalise(raw, out)
 
 
+class EdgeTts(Tts):
+    name = "edge"
+
+    def __init__(self) -> None:
+        if not re.fullmatch(r"en-[A-Z]{2}-[A-Za-z]+Neural", settings.tts_edge_voice):
+            raise ValueError("TTS_EDGE_VOICE must be an English neural voice, e.g. en-US-JennyNeural")
+        for name, value, unit in (("RATE", settings.tts_edge_rate, "%"),
+                                  ("PITCH", settings.tts_edge_pitch, "Hz"),
+                                  ("VOLUME", settings.tts_edge_volume, "%")):
+            if not re.fullmatch(r"[+-]\d+" + re.escape(unit), value) or not -50 <= int(value[:-len(unit)]) <= 50:
+                raise ValueError(f"TTS_EDGE_{name} must be a signed integer from -50 to +50{unit}, e.g. +0{unit}")
+
+    def voice_id(self) -> str:
+        return f"edge:{settings.tts_edge_voice}:{settings.tts_edge_rate}:{settings.tts_edge_pitch}:{settings.tts_edge_volume}"
+
+    def synthesize(self, text: str, out: Path) -> None:
+        try:
+            import edge_tts
+        except ImportError as exc:
+            raise RuntimeError("Jenny voice needs edge-tts: run `uv sync --extra neural-tts` in backend/") from exc
+        raw = out.with_suffix(".raw.mp3")
+
+        async def generate() -> None:
+            speech = edge_tts.Communicate(text, voice=settings.tts_edge_voice, rate=settings.tts_edge_rate,
+                                          pitch=settings.tts_edge_pitch, volume=settings.tts_edge_volume)
+            await asyncio.wait_for(speech.save(str(raw)), timeout=90)
+
+        try:
+            asyncio.run(generate())
+        except Exception as exc:
+            raw.unlink(missing_ok=True)
+            # Transport errors can embed signed WebSocket URLs; report only the status or type.
+            status = getattr(exc, "status", None)
+            reason = f"HTTP {status}" if isinstance(status, int) else type(exc).__name__
+            raise RuntimeError(f"Edge speech service unavailable ({reason}). Check internet access and retry.") from None
+        _normalise(raw, out)
+
+
 def _normalise(raw: Path, out: Path) -> None:
     """Trim leading/trailing silence, loudness-normalise, 24 kHz mono — keeps measured durations honest."""
     ffmpeg("-i", str(raw), "-af",
@@ -94,4 +135,4 @@ def _normalise(raw: Path, out: Path) -> None:
 
 
 def get_tts() -> Tts:
-    return {"openai": OpenAITts, "kokoro": KokoroTts, "system": SystemTts}.get(settings.tts_provider, Tts)()
+    return {"openai": OpenAITts, "kokoro": KokoroTts, "system": SystemTts, "edge": EdgeTts}.get(settings.tts_provider, Tts)()

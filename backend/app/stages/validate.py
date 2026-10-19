@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 from ..media import decode_errors, describe
 from ..pipeline import Ctx, Stage
 from ..store import sha256_file
@@ -22,6 +24,10 @@ def run(ctx: Ctx) -> str:
         raise ValueError("project needs a physical recording, a system recording and an SOP .md file")
 
     problems: list[str] = []
+    # The full decode checks are the slow part (4K): run both recordings at once.
+    pool = ThreadPoolExecutor(max_workers=2)
+    checks = {m.role: pool.submit(decode_errors, ctx.originals / m.filename) for m in (p.physical, p.system)}
+    pool.shutdown(wait=False)
     for media in (p.physical, p.system):
         path = ctx.originals / media.filename
         media.sha256 = sha256_file(path)
@@ -37,7 +43,7 @@ def run(ctx: Ctx) -> str:
         media.has_audio = info["has_audio"]
         media.audio_sample_rate = info["audio_sample_rate"]
         media.video_codec = info["video_codec"]
-        media.decode_errors = decode_errors(path)
+        media.decode_errors = checks[media.role].result()
         if media.decode_errors:
             problems.append(f"{media.role}: {media.decode_errors[0]}")
         if media.duration_ms < 1000:

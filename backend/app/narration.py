@@ -6,8 +6,9 @@ import re
 
 SUBJECT_RE = re.compile(
     r"^(?:the\s+)?(?:worker|operator|user|associate|employee|picker|person|he|she|they|someone)\s+(?:then\s+)?", re.I)
-MAX_WORDS = 16
-FILLER = re.compile(r"\b(?:carefully|then|now|simply|just|basically|quickly|slowly|gently|on the screen|in the system)\b\s*", re.I)
+# Words that never change what the worker must do. Order words (then, now) and manner words
+# (carefully, slowly, gently) are instructions in their own right and are kept.
+FILLER = re.compile(r"\b(?:simply|just|basically|on the screen|in the system)\b\s*", re.I)
 
 
 def _base_verb(word: str) -> str:
@@ -50,19 +51,11 @@ def exact_controls(text: str, names: list[str]) -> str:
 
 
 def shorten(text: str) -> str:
-    """One deterministic shortening pass: drop fillers, parentheticals, then trailing clauses."""
-    original = text
-    text = re.sub(r"\s*\([^)]*\)", "", text)
-    text = FILLER.sub("", text)
-    text = re.sub(r"\s{2,}", " ", text).strip()
-    if text == original or len(text.split()) > MAX_WORDS:
-        parts = re.split(r",\s*|\s+(?:and then|and|so that|which|to make sure)\s+", text.rstrip("."), maxsplit=1)
-        if len(parts) > 1 and len(parts[0].split()) >= 2:
-            text = parts[0]
-    words = text.rstrip(".").split()
-    if len(words) > MAX_WORDS:
-        text = " ".join(words[:MAX_WORDS])
-    return sentence(text)
+    """Remove filler words only. Never cuts a clause, a condition or at a word count: a line that still
+    does not fit is dropped and reported rather than turned into a different (or broken) instruction."""
+    shorter = re.sub(r"\s{2,}", " ", FILLER.sub("", text)).strip()
+    shorter = re.sub(r"\s+([,.])", r"\1", shorter)
+    return sentence(shorter) if shorter and shorter != text else text
 
 
 def unverified_names(text: str, verified: list[str]) -> list[str]:

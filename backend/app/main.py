@@ -130,8 +130,13 @@ def health():
         "ffmpeg": Path(settings.ffmpeg).name if shutil.which(settings.ffmpeg) or Path(settings.ffmpeg).exists() else None,
         "remotion": remotion_available(), "renderer": settings.renderer,
         "skellysync": Path(settings.skellysync_python).exists(),
-        "vlm": {"provider": settings.vlm_provider, "model": settings.vlm_model, "base_url": settings.vlm_base_url},
-        "llm": settings.llm_provider, "tts": {"provider": settings.tts_provider, "voice": settings.tts_voice},
+        # Report what actually runs: any VLM_PROVIDER other than "openai" means offline mock analysis.
+        "vlm": {"provider": "openai", "model": settings.vlm_model, "base_url": settings.vlm_base_url}
+               if settings.vlm_provider == "openai" else
+               {"provider": "anthropic", "model": settings.vlm_model, "base_url": "https://api.anthropic.com"}
+               if settings.vlm_provider == "anthropic" else {"provider": "mock", "model": None, "base_url": None},
+        "llm": settings.llm_provider, "tts": {"provider": settings.tts_provider,
+                "voice": settings.tts_edge_voice if settings.tts_provider == "edge" else settings.tts_voice},
         "extras": extras,
     }
 
@@ -186,6 +191,23 @@ def delete_project(pid: str):
     return {"ok": True}
 
 
+class FeedbackBody(BaseModel):
+    text: str
+
+
+@app.post("/api/projects/{pid}/feedback")
+def project_feedback(pid: str, body: FeedbackBody):
+    """A note about a finished video, kept in the project history for a later revision."""
+    p = _load(pid)
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(400, "Feedback cannot be empty")
+    if len(text) > 2000:
+        raise HTTPException(400, "Feedback is limited to 2000 characters")
+    _record(p, "video_feedback", text=text)
+    return {"ok": True}
+
+
 class RunBody(BaseModel):
     from_stage: str | None = None
     until: str | None = None
@@ -233,7 +255,7 @@ class TimelineBody(BaseModel):
 @app.put("/api/projects/{pid}/timeline")
 def set_timeline(pid: str, body: TimelineBody):
     p = _editable(pid)
-    if body.intro_ms is not None:
+    if body.intro_ms is not None and p.template != "item-v1":  # item-v1 intro length is the official bookend's
         p.timeline.intro_ms = max(0, min(15_000, body.intro_ms))
     if body.cuts is not None:
         p.timeline.cuts = [Cut(id=f"cut-{i+1}", start_ms=c.start_ms, end_ms=c.end_ms, reason=c.reason)

@@ -204,3 +204,177 @@ def test_ocr_text_matching():
     assert not text_present("Confirm", ["Cancel"])
     e = Event(id="x", start_ms=0, end_ms=1, view="system", action="a", ocr=[OcrHit(text="Confirm", score=0.9)])
     assert e.ocr[0].text == "Confirm"
+
+
+def test_edge_voice_is_selected_and_validated(monkeypatch):
+    from dataclasses import replace
+    import pytest
+    from app.providers import tts
+    monkeypatch.setattr(tts, "settings", replace(tts.settings, tts_provider="edge"))
+    voice = tts.get_tts()
+    assert isinstance(voice, tts.EdgeTts) and voice.voice_id() == "edge:en-US-JennyNeural:+0%:+0Hz:+0%"
+    monkeypatch.setattr(tts, "settings", replace(tts.settings, tts_edge_rate="fast"))
+    with pytest.raises(ValueError, match="RATE"):
+        tts.EdgeTts()
+
+
+def test_old_project_file_loads_as_legacy_template():
+    p = Project.model_validate({"id": "old", "title": "Old", "timeline": {"intro_ms": 3000,
+                                "segments": [{"kind": "intro", "out_start_ms": 0, "out_end_ms": 3000}]}})
+    assert p.template == "legacy" and p.timeline.title_ms == 0 and p.timeline.outro_ms == 0
+
+
+def test_item_template_timeline_has_bookends_title_and_frame_grid():
+    tl = Timeline(intro_ms=5067, title_ms=4000, outro_ms=4200, cuts=[Cut(id="c1", start_ms=2000, end_ms=3000)])
+    build_segments(tl, 10_000)
+    assert [s.kind for s in tl.segments] == ["intro", "title", "source", "source", "outro"]
+    intro, title, outro = tl.segments[0], tl.segments[1], tl.segments[-1]
+    assert (intro.from_frame, intro.duration_frames) == (0, 152)
+    assert (title.from_frame, title.duration_frames) == (152, 120)
+    assert (outro.from_frame, outro.duration_frames) == (542, 126)  # 18067 ms -> frame 542
+    assert tl.to_output(10_000) == tl.segments[-2].out_end_ms  # last footage instant, not the outro
+    assert tl.duration_ms == 5067 + 4000 + 9000 + 4200
+
+
+def test_remotion_progress_lines_are_parsed():
+    from app.renderer import parse_progress
+    assert parse_progress("Rendering frames    ━━━  1234/5286 2m 10s remaining") == ("rendering", 1234, 5286, "2m 10s")
+    assert parse_progress("\x1b[90mEncoding video\x1b[39m ━━ 100/5286") == ("encoding", 100, 5286, "")
+    assert parse_progress("Bundling 50%") is None
+
+
+def test_only_one_video_renders_at_a_time(tmp_path):
+    import threading
+    from app import pipeline
+    from app.pipeline import Ctx, Runner, Stage
+    from app.store import Store
+    store, active, peak, gate = Store(tmp_path), [0], [0], threading.Event()
+
+    def heavy(ctx):
+        active[0] += 1
+        peak[0] = max(peak[0], active[0])
+        gate.wait(5)
+        active[0] -= 1
+        return "rendered"
+
+    stage = Stage("render", "Final render", "t", lambda p: {"id": p.id}, heavy)
+    original = pipeline.stages
+    pipeline.stages = lambda: [stage]
+    try:
+        runner = Runner(store)
+        ids = [store.create(f"video {i}").id for i in range(2)]
+        for pid in ids:
+            runner.start(pid)
+        threading.Timer(0.5, gate.set).start()
+        assert all(runner.wait(pid, 10) for pid in ids)
+    finally:
+        pipeline.stages = original
+    assert peak[0] == 1
+    assert all(store.load(pid).stages["render"].state == "done" for pid in ids)
+
+
+def test_shorten_only_removes_filler_never_facts():
+    from app.narration import shorten
+    line = "Scan the LP label with the handheld camera to add the LP to the list."
+    assert shorten(line) == line
+    assert shorten("Then simply tap Confirm on the screen.") == "Then tap Confirm."
+    keep = "Do not move the pallet until the quantity is confirmed, then close the task."
+    assert shorten(keep) == keep
+
+
+def test_sop_introduction_is_parsed():
+    from app.sopparse import parse_intro
+    assert parse_intro("# Move\n\n**Purpose.** Move inventory safely.\n\n## 1. Open") == "Move inventory safely."
+    assert parse_intro("# Move\n\n## Purpose\nMove it.\nKeep records.\n\n## 1. Open") == "Move it. Keep records."
+    assert parse_intro("# Move\n\n1. Open the app") == ""
+
+
+def test_title_card_grows_to_fit_the_spoken_introduction():
+    from app.stages.title_voice import card_ms
+    assert card_ms(1000) == 4000                     # short intro: keep the 4 s minimum
+    long = card_ms(12_000)                           # 0.5 s lead + 12 s voice + 0.7 s tail
+    assert long >= 13_200 and abs(long * 30 / 1000 - round(long * 30 / 1000)) < 0.05  # on the frame grid
+
+
+def test_intro_line_reads_title_then_purpose():
+    from app.models import Project, SopDoc
+    from app.stages.narrate import intro_line
+    p = Project(id="p", title="x", sop=SopDoc(filename="s.md", title="Inventory Movement", purpose="Move stock safely"))
+    assert intro_line(p) == "Inventory Movement. Move stock safely."
+
+
+def test_speech_context_is_english_with_language_and_time():
+    from app.models import Project, TranscriptSegment
+    from app.stages.analyze import speech_context
+    p = Project(id="p", title="x", transcript=[
+        TranscriptSegment(role="physical", start_ms=1000, end_ms=3000, text="escanear la orden", language="es",
+                          text_en="scan the order"),
+        TranscriptSegment(role="system", start_ms=9000, end_ms=9500, text="tap confirm", language="en", text_en="tap confirm")])
+    ctx = speech_context(p, 0, 5000)
+    assert ctx == '[1.0s floor mic, es->en] "scan the order"'
+
+
+def test_script_uses_nearby_speech_and_falls_back_to_rules(monkeypatch):
+    from app.models import Event, NarrationCue, Project, SopStep, TranscriptSegment
+    from app.stages import narrate
+    p = Project(id="p", title="x",
+                events=[Event(id="ev-1", start_ms=5000, end_ms=6000, view="system", action="Taps Close Task",
+                              visible_text=["CLOSE TASK"], sop_step_id="s1", confidence=0.9)],
+                sop_steps=[SopStep(id="s1", number="1", title="Close the Task", text="Close the Task")],
+                transcript=[TranscriptSegment(role="physical", start_ms=4000, end_ms=5500, text="y cierran la tarea",
+                                              language="es", text_en="and they close the task")])
+    seen = {}
+
+    class FakeLlm:
+        def structured(self, messages, schema, **kw):
+            seen["prompt"] = messages[1]["content"]
+            return schema(lines=[{"id": "cue-1", "line": "Tap CLOSE TASK to finish the movement"}])
+
+    cues = [NarrationCue(id="cue-1", event_id="ev-1", text="Tap Close Task.", sop_step_id="s1")]
+    assert narrate.write_script(FakeLlm(), p, cues) == {"cue-1": "Tap CLOSE TASK to finish the movement."}
+    assert "and they close the task" in seen["prompt"] and "es->en" in seen["prompt"]
+
+
+def test_transcript_translation_sets_language_and_english(monkeypatch, tmp_path):
+    from app.models import TranscriptSegment, TranscriptWord
+    from app.pipeline import Ctx
+    from app.providers import llm as llm_mod
+    from app.stages import transcribe
+    from app.store import Store
+
+    class FakeLlm:
+        def structured(self, messages, schema, **kw):
+            return schema(items=[{"id": 0, "language": "es", "english": "print the label"},
+                                 {"id": 1, "language": "en", "english": "scan the LP"}])
+
+    monkeypatch.setattr(llm_mod, "get_llm", lambda: FakeLlm())
+    store = Store(tmp_path)
+    p = store.create("t")
+    segs = [TranscriptSegment(role="physical", start_ms=0, end_ms=900, text="printear el leivo"),
+            TranscriptSegment(role="system", start_ms=1000, end_ms=1900, text="scan the LP")]
+    transcribe._translate(Ctx(p, store), segs)
+    assert [(s.language, s.text_en) for s in segs] == [("es", "print the label"), ("en", "scan the LP")]
+    # long Whisper segments are split at word timings
+    words = [TranscriptWord(role="physical", start_ms=i * 1000, end_ms=i * 1000 + 800, text=f"w{i}.") for i in range(30)]
+    long = TranscriptSegment(role="physical", start_ms=0, end_ms=29_800, text="...", words=words)
+    parts = transcribe._split(long)
+    assert len(parts) > 1 and all(p.end_ms - p.start_ms <= transcribe.MAX_SEGMENT_MS for p in parts)
+
+
+def test_save_retries_when_windows_briefly_locks_the_file(monkeypatch, tmp_path):
+    from pathlib import Path as P
+    from app.store import Store
+    store = Store(tmp_path)
+    p = store.create("locked")
+    real, calls = P.replace, []
+
+    def flaky(self, target):
+        calls.append(1)
+        if len(calls) < 3:
+            raise PermissionError(5, "Access is denied")
+        return real(self, target)
+
+    monkeypatch.setattr(P, "replace", flaky)
+    p.title = "saved anyway"
+    store.save(p)
+    assert len(calls) == 3 and store.load(p.id).title == "saved anyway"

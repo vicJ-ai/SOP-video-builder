@@ -10,7 +10,8 @@ export interface SourceRef {
 }
 
 export interface SegmentProp {
-  kind: "intro" | "source";
+  kind: "intro" | "title" | "source" | "outro";
+  availableRoles?: string[];
   fromFrame: number;
   durationInFrames: number;
   physicalStartFrame: number; // first source frame to show (trimBefore)
@@ -29,6 +30,8 @@ export interface CaptionProp {
   startMs: number;
   endMs: number;
   text: string;
+  fromFrame?: number;
+  endFrame?: number;
 }
 
 export interface LayoutProp {
@@ -73,8 +76,12 @@ export type FinalProps = {
   title: string;
   subtitle: string;
   draft: boolean;
-  physical: SourceRef;
-  system: SourceRef;
+  physical: SourceRef | null;
+  system: SourceRef | null;
+  template?: string;
+  brandFrames?: {intro: string; outro: string};
+  workflow?: string[];
+  demo?: boolean;
   segments: SegmentProp[];
   cues: CueProp[];
   captions: CaptionProp[];

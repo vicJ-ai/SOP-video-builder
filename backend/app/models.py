@@ -50,6 +50,7 @@ class SopDoc(BaseModel):
     filename: str
     sha256: str = ""
     title: str = ""
+    purpose: str = ""  # the SOP's introduction ("Purpose." paragraph), voiced over the title card
 
 
 # --------------------------------------------------------------------------- sync
@@ -113,10 +114,13 @@ class Cut(BaseModel):
 
 
 class Segment(BaseModel):
-    kind: Literal["intro", "source"]
+    kind: Literal["intro", "title", "source", "outro"]
     out_start_ms: int
     out_end_ms: int
     shared_start_ms: int = 0  # only for kind=source
+    from_frame: int | None = None  # canonical 30 fps frame schedule, set by build_segments
+    duration_frames: int | None = None
+    available_roles: list[str] = Field(default_factory=list)
 
     @property
     def duration_ms(self) -> int:
@@ -125,17 +129,18 @@ class Segment(BaseModel):
 
 class Timeline(BaseModel):
     intro_ms: int = 3000
+    title_ms: int = 0  # item-v1: white title card after the official intro
+    outro_ms: int = 0  # item-v1: official closing bookend
     cuts: list[Cut] = Field(default_factory=list)
     segments: list[Segment] = Field(default_factory=list)  # derived; rebuilt by stages.timeline
     duration_ms: int = 0
 
     def to_output(self, shared_ms: int) -> int | None:
         """Shared time -> output time; None when the instant was cut."""
-        for seg in self.segments:
-            if seg.kind != "source":
-                continue
+        sources = [s for s in self.segments if s.kind == "source"]
+        for seg in sources:
             offset = shared_ms - seg.shared_start_ms
-            if 0 <= offset < seg.duration_ms or (offset == seg.duration_ms and seg is self.segments[-1]):
+            if 0 <= offset < seg.duration_ms or (offset == seg.duration_ms and seg is sources[-1]):
                 return seg.out_start_ms + offset
         return None
 
@@ -169,6 +174,8 @@ class TranscriptSegment(BaseModel):
     end_ms: int
     text: str
     words: list[TranscriptWord] = Field(default_factory=list)
+    language: str = ""  # detected per segment, e.g. "en" or "es"
+    text_en: str = ""  # English rendering of `text` (same as text when already English)
 
 
 class CandidateWindow(BaseModel):
@@ -290,6 +297,10 @@ class NarrationCue(BaseModel):
     anchor_out_ms: int | None = None  # where the event starts in output time
     schedule_notes: list[str] = Field(default_factory=list)
     dropped: bool = False  # event was cut or cue could not be placed
+    phase: Literal["opener", "title", "operational"] = "operational"
+    from_frame: int | None = None  # set by frameclock.resolve_cues
+    end_frame: int | None = None
+    duration_frames: int | None = None
 
 
 class Caption(BaseModel):
@@ -298,6 +309,8 @@ class Caption(BaseModel):
     start_ms: int  # output time
     end_ms: int
     text: str
+    from_frame: int | None = None
+    end_frame: int | None = None
 
 
 class LayoutKey(BaseModel):
@@ -357,6 +370,7 @@ class Project(BaseModel):
     title: str
     created_at: str = Field(default_factory=now_iso)
     updated_at: str = Field(default_factory=now_iso)
+    template: str = "legacy"  # "item-v1": official Item bookends, title card and caption bar
     physical: SourceMedia | None = None
     system: SourceMedia | None = None
     sop: SopDoc | None = None

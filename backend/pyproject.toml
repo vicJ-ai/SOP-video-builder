@@ -22,6 +22,8 @@ scene = ["scenedetect[opencv-headless]>=0.6.4"]
 ocr = ["paddleocr>=3.0", "paddlepaddle>=3.0"]
 tts = ["kokoro>=0.9", "soundfile>=0.12"]
 system-tts = ["pyttsx3>=2.98"]
+neural-tts = ["edge-tts==7.3.1"]  # 7.2.8 is now refused (HTTP 403) by the Edge speech service
+claude = ["anthropic>=1.15.0"]  # VLM_PROVIDER=anthropic / LLM_PROVIDER=anthropic
 dev = ["pytest>=8"]
 # SkellySync (AGPL-3.0) is installed into its own venv by scripts/setup.ps1, never into this one.
 

@@ -10,6 +10,7 @@ import json
 import re
 import shutil
 import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -66,7 +67,12 @@ class Store:
         pid = f"{slug(title)}-{uuid.uuid4().hex[:6]}"
         for sub in ("originals", "work", "out"):
             (self.dir(pid) / sub).mkdir(parents=True, exist_ok=True)
-        project = Project(id=pid, title=title)
+        project = Project(id=pid, title=title, template="item-v1")
+        from .brand import bookend_counts
+        counts = bookend_counts()  # natural frame counts of the official bookends at 30 fps
+        project.timeline.intro_ms = round(counts["intro"] * 1000 / 30)
+        project.timeline.title_ms = 4000
+        project.timeline.outro_ms = round(counts["outro"] * 1000 / 30)
         self.save(project)
         return project
 
@@ -82,7 +88,16 @@ class Store:
             path = self.dir(project.id) / "project.json"
             tmp = path.with_suffix(".json.tmp")
             tmp.write_text(project.model_dump_json(indent=2), encoding="utf-8")
-            tmp.replace(path)
+            # Windows refuses to replace a file another reader (the web page polling, a virus scanner) has
+            # open at that instant. Those reads take milliseconds, so retry briefly instead of failing a stage.
+            for attempt in range(20):
+                try:
+                    tmp.replace(path)
+                    break
+                except PermissionError:
+                    if attempt == 19:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
 
     def list(self) -> list[Project]:
         out = []
