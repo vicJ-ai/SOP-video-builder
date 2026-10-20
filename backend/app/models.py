@@ -114,10 +114,10 @@ class Cut(BaseModel):
 
 
 class Segment(BaseModel):
-    kind: Literal["intro", "title", "source", "outro"]
+    kind: Literal["intro", "title", "source", "hold", "outro"]  # hold: last footage frame, still
     out_start_ms: int
     out_end_ms: int
-    shared_start_ms: int = 0  # only for kind=source
+    shared_start_ms: int = 0  # kind=source: first instant shown; kind=hold: the frame held
     from_frame: int | None = None  # canonical 30 fps frame schedule, set by build_segments
     duration_frames: int | None = None
     available_roles: list[str] = Field(default_factory=list)
@@ -132,8 +132,29 @@ class Timeline(BaseModel):
     title_ms: int = 0  # item-v1: white title card after the official intro
     outro_ms: int = 0  # item-v1: official closing bookend
     cuts: list[Cut] = Field(default_factory=list)
+    # Silent footage removed automatically before the first narrated action / after the last line (set by tts).
+    trim_head_ms: int = 0
+    trim_tail_ms: int = 0
+    hold_ms: int = 0  # last footage frame held still so closing narration can finish (set by tts)
     segments: list[Segment] = Field(default_factory=list)  # derived; rebuilt by stages.timeline
     duration_ms: int = 0
+
+    def extent(self, seg: Segment) -> int:
+        """Where narration starting in ``seg`` must end: its end, or the end of a hold right after it."""
+        nxt = next((s for s in self.segments if s.out_start_ms == seg.out_end_ms), None)
+        return nxt.out_end_ms if nxt is not None and nxt.kind == "hold" else seg.out_end_ms
+
+    def removed(self, shared_duration_ms: int) -> list[list[int]]:
+        """Merged shared-time ranges left out of the output: reviewer cuts plus the head/tail trim."""
+        spans = [(max(0, c.start_ms), min(shared_duration_ms, c.end_ms)) for c in self.cuts]
+        spans += [(0, self.trim_head_ms), (shared_duration_ms - self.trim_tail_ms, shared_duration_ms)]
+        merged: list[list[int]] = []
+        for s, e in sorted(sp for sp in spans if sp[1] > sp[0]):
+            if merged and s <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], e)
+            else:
+                merged.append([s, e])
+        return merged
 
     def to_output(self, shared_ms: int) -> int | None:
         """Shared time -> output time; None when the instant was cut."""

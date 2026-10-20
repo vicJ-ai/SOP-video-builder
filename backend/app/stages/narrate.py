@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from ..models import PLACEHOLDER_ACTIONS, NarrationCue
 from ..narration import exact_controls, imperative, sentence, unverified_names
 from ..pipeline import Ctx, Stage
+from ..providers.errors import ClaudeAccountError
 from ..providers.llm import get_llm
 
 log = logging.getLogger(__name__)
@@ -102,6 +103,8 @@ def _polish(llm, line: str, names: list[str]) -> str:
                                           f"unchanged: {names}. Add no new facts, names or steps."},
             {"role": "user", "content": line},
         ], Polished).text.strip()
+    except ClaudeAccountError:
+        raise
     except Exception as exc:  # noqa: BLE001
         log.warning("polish failed: %s", exc)
         return line
@@ -156,6 +159,8 @@ def run(ctx: Ctx) -> str:
         todo = [c for c in cues if c.phase == "operational" and not c.human_edited]
         try:
             written = write_script(llm, p, todo)
+        except ClaudeAccountError:
+            raise  # never ship robotic fallback lines because the key or credit ran out
         except Exception as exc:  # noqa: BLE001 - the rule-based lines stand in
             log.warning("script writing failed: %s", exc)
             written = {}

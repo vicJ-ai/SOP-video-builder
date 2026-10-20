@@ -56,6 +56,64 @@ def test_scheduler_drops_cues_in_cut_ranges_and_never_crosses_cuts():
     assert placed["c2"].dropped and any("cut" in n for n in placed["c2"].notes)  # would cross the cut
 
 
+def test_silent_head_and_tail_are_trimmed_around_the_narration(tmp_path):
+    from app.models import SyncResult
+    from app.stages import tts
+    p = Project(id="t", title="t", sync=SyncResult(shared_duration_ms=60_000),
+                timeline=Timeline(intro_ms=5000, title_ms=4000, outro_ms=4000),
+                events=[ev("a", 20_000, 21_000), ev("b", 30_000, 31_000)],
+                cues=[cue("ca", "a", 0), cue("cb", "b", 0)])
+    ctx = _Ctx(p)
+    ctx.work, ctx.provenance = tmp_path, lambda *a, **k: None
+    tts.run(ctx)
+    tl = p.timeline
+    assert tl.trim_head_ms == 20_000 - tts.HEAD_PAD_MS  # footage opens just before the first action
+    source = next(s for s in tl.segments if s.kind == "source")
+    assert source.shared_start_ms == tl.trim_head_ms and source.out_start_ms == 9000
+    last_end = max(c.out_end_ms for c in p.cues)
+    assert source.out_end_ms == last_end + tts.TAIL_PAD_MS  # and closes just after the last line
+    assert not any(c.dropped for c in p.cues)
+    assert tl.removed(60_000) == [[0, tl.trim_head_ms], [60_000 - tl.trim_tail_ms, 60_000]]
+
+    # Rerunning measures from the untrimmed footage again, so the result is stable.
+    before = [s.model_dump() for s in tl.segments]
+    tts.run(ctx)
+    assert [s.model_dump() for s in tl.segments] == before
+
+
+def test_last_frame_is_held_so_closing_lines_finish(tmp_path):
+    from app.frameclock import resolve_cues
+    from app.models import SyncResult
+    from app.stages import tts
+    closing = NarrationCue(id="cz", event_id="z", kind="result",
+                           text="The screen shows Close Success and returns you to the Inventory Control menu.")
+    p = Project(id="t", title="t", sync=SyncResult(shared_duration_ms=30_000),
+                timeline=Timeline(intro_ms=5000, outro_ms=4000),
+                events=[ev("a", 3000, 4000), ev("z", 28_500, 29_500, kind="result")], cues=[cue("ca", "a", 0), closing])
+    ctx = _Ctx(p)
+    ctx.work, ctx.provenance = tmp_path, lambda *a, **k: None
+    tts.run(ctx)
+    tl = p.timeline
+    assert [s.kind for s in tl.segments] == ["intro", "source", "hold", "outro"]
+    source, hold = tl.segments[1], tl.segments[2]
+    assert not closing.dropped and source.out_end_ms < closing.out_end_ms <= hold.out_end_ms
+    assert 0 < hold.duration_ms <= tts.MAX_HOLD_MS and tl.trim_tail_ms == 0
+    assert hold.shared_start_ms == 30_000 - 34 and tl.to_shared(hold.out_start_ms) is None
+    resolve_cues(p)
+    assert not closing.dropped
+
+
+def test_short_silences_are_left_alone(tmp_path):
+    from app.models import SyncResult
+    from app.stages import tts
+    p = Project(id="t", title="t", sync=SyncResult(shared_duration_ms=4000),
+                timeline=Timeline(intro_ms=0), events=[ev("a", 1000, 1500)], cues=[cue("ca", "a", 0)])
+    ctx = _Ctx(p)
+    ctx.work, ctx.provenance = tmp_path, lambda *a, **k: None
+    tts.run(ctx)
+    assert p.timeline.trim_head_ms == p.timeline.trim_tail_ms == 0
+
+
 def test_sop_parse_stable_ids_controls_and_evidence():
     title, steps = parse_sop(SOP_MD)
     assert title == "Receive Pallet into Location"
@@ -333,6 +391,31 @@ def test_script_uses_nearby_speech_and_falls_back_to_rules(monkeypatch):
     cues = [NarrationCue(id="cue-1", event_id="ev-1", text="Tap Close Task.", sop_step_id="s1")]
     assert narrate.write_script(FakeLlm(), p, cues) == {"cue-1": "Tap CLOSE TASK to finish the movement."}
     assert "and they close the task" in seen["prompt"] and "es->en" in seen["prompt"]
+
+
+def test_rejected_key_stops_the_video_instead_of_narrating_without_ai(monkeypatch):
+    import pytest
+
+    from app.models import Event, Project, SopStep
+    from app.providers.errors import ClaudeAccountError, ClaudeError
+    from app.stages import narrate
+    p = Project(id="p", title="x",
+                events=[Event(id="ev-1", start_ms=5000, end_ms=6000, view="system", action="Taps Close Task",
+                              sop_step_id="s1", confidence=0.9)],
+                sop_steps=[SopStep(id="s1", number="1", title="Close the Task", text="Close the Task")])
+
+    def llm_raising(exc):
+        class FakeLlm:
+            def structured(self, *a, **kw):
+                raise exc
+        return FakeLlm()
+
+    monkeypatch.setattr(narrate, "get_llm", lambda: llm_raising(ClaudeAccountError("Anthropic did not accept this API key.")))
+    with pytest.raises(ClaudeAccountError, match="did not accept"):
+        narrate.run(_Ctx(p))
+    # a passing problem (rate limit, odd answer) still falls back to the rule-based lines
+    monkeypatch.setattr(narrate, "get_llm", lambda: llm_raising(ClaudeError("Anthropic rate limit reached.")))
+    assert "1 narration lines" in narrate.run(_Ctx(p))
 
 
 def test_transcript_translation_sets_language_and_english(monkeypatch, tmp_path):

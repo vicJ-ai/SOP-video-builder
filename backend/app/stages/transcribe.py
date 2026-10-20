@@ -17,6 +17,7 @@ from ..config import settings
 from ..media import audio_samples
 from ..models import TranscriptSegment, TranscriptWord
 from ..pipeline import Ctx, Skip, Stage
+from ..providers.errors import ClaudeAccountError
 from ..store import stable_hash
 
 log = logging.getLogger(__name__)
@@ -134,6 +135,8 @@ def run(ctx: Ctx) -> str:
     p.transcript = sorted(merged, key=lambda s: s.start_ms)
     try:
         how = _translate(ctx, p.transcript)
+    except ClaudeAccountError:
+        raise  # the first Claude call: stop here so a bad key is reported before minutes of work
     except Exception as exc:  # noqa: BLE001 - the transcript is useful even untranslated
         log.warning("transcript translation failed: %s", exc)
         how = f"translation failed: {exc}"[:120]

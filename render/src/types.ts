@@ -10,7 +10,7 @@ export interface SourceRef {
 }
 
 export interface SegmentProp {
-  kind: "intro" | "title" | "source" | "outro";
+  kind: "intro" | "title" | "source" | "hold" | "outro"; // hold: one source frame shown still
   availableRoles?: string[];
   fromFrame: number;
   durationInFrames: number;

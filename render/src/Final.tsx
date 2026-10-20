@@ -1,6 +1,6 @@
 // Owned Item composition: integer frames, constant source trims, no fake device chrome.
 import React,{useEffect,useState} from "react";
-import {AbsoluteFill, Audio, Easing, Img, interpolate, OffthreadVideo, Sequence, staticFile, useCurrentFrame,delayRender,continueRender,cancelRender} from "remotion";
+import {AbsoluteFill, Audio, Easing, Freeze, Img, interpolate, OffthreadVideo, Sequence, staticFile, useCurrentFrame,delayRender,continueRender,cancelRender} from "remotion";
 import {Progress} from "@/components/remocn/progress";
 import {Backdrop} from "@/components/remocn/backdrop";
 import type {FinalProps, SegmentProp, SourceRef} from "./types";
@@ -17,10 +17,11 @@ const Fonts=()=>{
 };
 const Panel=({source,segments,role,left,width}:{source:SourceRef;segments:SegmentProp[];role:"physical"|"system";left:number;width:number})=>
  <div style={{position:"absolute",left,top:162,width,height:819,background:"#F2F2F2",overflow:"hidden"}}>
- {segments.filter(s=>s.kind==="source"&&(!s.availableRoles||s.availableRoles.includes(role))).map(s=>
- <Sequence key={s.fromFrame} from={s.fromFrame} durationInFrames={s.durationInFrames} layout="none">
- <OffthreadVideo src={staticFile(source.src)} trimBefore={role==="physical"?s.physicalStartFrame:s.systemStartFrame} muted playbackRate={1} style={{width:"100%",height:"100%",objectFit:"contain"}}/>
- </Sequence>)}</div>;
+ {segments.filter(s=>(s.kind==="source"||s.kind==="hold")&&(!s.availableRoles||s.availableRoles.includes(role))).map(s=>{
+ const video=<OffthreadVideo src={staticFile(source.src)} trimBefore={role==="physical"?s.physicalStartFrame:s.systemStartFrame} muted playbackRate={1} style={{width:"100%",height:"100%",objectFit:"contain"}}/>;
+ return <Sequence key={s.fromFrame} from={s.fromFrame} durationInFrames={s.durationInFrames} layout="none">
+ {s.kind==="hold"?<Freeze frame={0}>{video}</Freeze>:video}
+ </Sequence>;})}</div>;
 export const ItemTitle=({props}:{props:FinalProps})=><AbsoluteFill style={{background:C.white,color:C.black}}>
  <div style={{position:"absolute",left:132,top:126,width:9,height:155,background:C.purple}}/>
  <div style={{position:"absolute",left:177,top:121}}><FitText text={props.title} label="Process title" width={1510} height={179} maxFont={76} minFont={44} maxLines={2}/></div>
@@ -42,7 +43,7 @@ export const Final:React.FC<FinalProps>=(props)=>{
  const physical=props.physical&&roles.includes("physical"),system=props.system&&roles.includes("system"),paired=!!physical&&!!system;
  const systemWidth=paired?Math.round(1756*share):1780,physicalWidth=paired?1756-systemWidth:1780;
  const caption=props.captions.find(c=>frame>=(c.fromFrame??Math.round(c.startMs*props.fps/1000))&&frame<(c.endFrame??Math.round(c.endMs*props.fps/1000)));
- const source=segment?.kind==="source",bookend=segment?.kind==="intro"||segment?.kind==="outro";
+ const source=segment?.kind==="source"||segment?.kind==="hold",bookend=segment?.kind==="intro"||segment?.kind==="outro";
  return <AbsoluteFill style={{fontFamily:"Satoshi,Arial,sans-serif",background:bookend?C.black:C.white}}><Fonts/>
  {source&&<Backdrop fill={{type:"color",value:C.white}} padding={0} radius={0} shadow="">
  {physical&&props.physical&&<Panel source={props.physical} role="physical" segments={props.segments} left={70} width={physicalWidth}/>}

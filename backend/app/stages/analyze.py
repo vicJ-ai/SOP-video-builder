@@ -18,6 +18,7 @@ from ..config import settings
 from ..media import extract_frame
 from ..models import Event
 from ..pipeline import Ctx, Stage
+from ..providers.errors import ClaudeAccountError
 from ..providers.vlm import SYSTEM_PROMPT, Frame, VlmEvents, get_vlm
 from ..store import stable_hash
 from .preview import PREVIEW
@@ -117,6 +118,8 @@ def _coarse(ctx: Ctx, vlm) -> list[Event]:
                     if (speech := speech_context(p, lo, hi)) else ""))
         try:
             events += _to_events(vlm.describe_window(frames, instruction=instr), lo, hi, "vlm-coarse")
+        except ClaudeAccountError:
+            raise  # a rejected key or empty account fails every chunk: stop with a clear message
         except Exception as exc:  # noqa: BLE001 - one bad chunk must not sink the whole analysis
             log.warning("coarse chunk %s-%s failed: %s", lo, hi, exc)
             events.append(Event(id=event_id(lo, hi, "both", "analysis failed"), start_ms=lo, end_ms=hi, view="both",
@@ -146,6 +149,8 @@ def _fine(ctx: Ctx, vlm) -> list[Event]:
         try:
             events += _to_events(vlm.describe_window(sorted(frames + pf, key=lambda f: f.t_ms), instruction=instr),
                                  w.start_ms, w.end_ms, "vlm-fine")
+        except ClaudeAccountError:
+            raise
         except Exception as exc:  # noqa: BLE001
             log.warning("fine window %s-%s failed: %s", w.start_ms, w.end_ms, exc)
     return events
