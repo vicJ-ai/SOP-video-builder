@@ -32,6 +32,7 @@ def build_props(ctx: Ctx, *, draft: bool) -> dict:
             "availableRoles": s.available_roles or ["physical", "system"],
             "physicalStartFrame": frames(sync.physical_ms(s.shared_start_ms), fps) if s.kind in ("source", "hold") else 0,
             "systemStartFrame": frames(sync.system_ms(s.shared_start_ms), fps) if s.kind in ("source", "hold") else 0,
+            "playbackRate": s.rate,
         })
     cues = [{"id": c.id, "src": c.audio, "fromFrame": c.from_frame if c.from_frame is not None else frames(c.out_start_ms, fps),
              "durationInFrames": c.duration_frames or max(1, frames(c.out_end_ms - c.out_start_ms, fps) + 1),

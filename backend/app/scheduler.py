@@ -4,7 +4,8 @@ Hard rules (never violated):
   * previous_end + GAP <= next_start                      (no overlapping clips)
   * a cue lies inside one source segment                  (never crosses a cut or the intro)
   * a result cue starts at/after its result is visible    (no claim before evidence)
-  * footage is never frozen or retimed to fit speech
+  * footage is never frozen or retimed to fit speech (only quiet waits between lines are fast-forwarded,
+    and the end may hold still for the closing lines — both decided in stages.tts, never to fit a line)
 Soft rules (violations are reported for shortening / review):
   * action cues start shortly before or at their action (LEAD .. MAX_LAG)
   * a cue finishes before the next narrated action begins

@@ -68,10 +68,10 @@ def test_silent_head_and_tail_are_trimmed_around_the_narration(tmp_path):
     tts.run(ctx)
     tl = p.timeline
     assert tl.trim_head_ms == 20_000 - tts.HEAD_PAD_MS  # footage opens just before the first action
-    source = next(s for s in tl.segments if s.kind == "source")
-    assert source.shared_start_ms == tl.trim_head_ms and source.out_start_ms == 9000
+    sources = [s for s in tl.segments if s.kind == "source"]  # the quiet wait between the lines plays at 3x
+    assert sources[0].shared_start_ms == tl.trim_head_ms and sources[0].out_start_ms == 9000
     last_end = max(c.out_end_ms for c in p.cues)
-    assert source.out_end_ms == last_end + tts.TAIL_PAD_MS  # and closes just after the last line
+    assert sources[-1].out_end_ms == last_end + tts.TAIL_PAD_MS  # and closes just after the last line
     assert not any(c.dropped for c in p.cues)
     assert tl.removed(60_000) == [[0, tl.trim_head_ms], [60_000 - tl.trim_tail_ms, 60_000]]
 
@@ -101,6 +101,35 @@ def test_last_frame_is_held_so_closing_lines_finish(tmp_path):
     assert hold.shared_start_ms == 30_000 - 34 and tl.to_shared(hold.out_start_ms) is None
     resolve_cues(p)
     assert not closing.dropped
+
+
+def test_fast_forward_segment_remaps_time():
+    t = Timeline(intro_ms=1000, speedups=[[4000, 10_000]])
+    build_segments(t, 20_000)
+    assert [(s.kind, s.rate) for s in t.segments] == [("intro", 1), ("source", 1), ("source", 3), ("source", 1)]
+    fast = t.segments[2]
+    assert fast.duration_ms == 2000 and fast.shared_ms == 6000
+    assert t.duration_ms == 1000 + 20_000 - 4000  # 6 s of footage shown in 2 s
+    assert t.to_output(7000) == 1000 + 4000 + 1000 and t.to_shared(6000) == 7000
+    assert t.to_output(10_000) == 7000 and t.to_output(20_000) == t.duration_ms
+
+
+def test_long_quiet_waits_between_lines_are_fast_forwarded(tmp_path):
+    from app.models import SyncResult
+    from app.stages import tts
+    p = Project(id="t", title="t", sync=SyncResult(shared_duration_ms=30_000), timeline=Timeline(intro_ms=0),
+                events=[ev("a", 1000, 2000), ev("b", 12_000, 13_000), ev("c", 14_500, 15_500)],
+                cues=[cue("ca", "a", 0), cue("cb", "b", 0), cue("cc", "c", 0)])
+    ctx = _Ctx(p)
+    ctx.work, ctx.provenance = tmp_path, lambda *a, **k: None
+    msg = tts.run(ctx)
+    fast = [s for s in p.timeline.segments if s.rate != 1]
+    assert len(fast) == 1 and "fast-forwarded 1 pause" in msg  # the ~10 s wait; the short gap before "c" stays
+    assert not any(c.dropped for c in p.cues)
+    s = fast[0]
+    assert not any(c.out_start_ms < s.out_end_ms and c.out_end_ms > s.out_start_ms for c in p.cues)
+    a, b = sorted(p.cues, key=lambda c: c.out_start_ms)[:2]
+    assert s.out_start_ms - a.out_end_ms >= tts.PAUSE_PAD_MS and b.out_start_ms >= s.out_end_ms
 
 
 def test_short_silences_are_left_alone(tmp_path):

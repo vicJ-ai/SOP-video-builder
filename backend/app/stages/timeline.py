@@ -10,7 +10,7 @@ from __future__ import annotations
 import csv
 import json
 
-from ..models import Segment, Timeline
+from ..models import SPEEDUP_RATE, Segment, Timeline
 from ..pipeline import Ctx, Stage
 
 
@@ -20,6 +20,25 @@ def _inputs(p):
         "intro": p.timeline.intro_ms, "cuts": [c.model_dump() for c in p.timeline.cuts],
         "title": p.timeline.title_ms, "outro": p.timeline.outro_ms,
     }
+
+
+def _source(segments: list[Segment], out: int, lo: int, hi: int, speedups: list[list[int]]) -> int:
+    """Append footage [lo, hi) of shared time, split so each fast-forward range is its own segment."""
+    cursor = lo
+    for s, e in sorted((max(lo, s), min(hi, e)) for s, e in speedups):
+        if e - s < 100 or s < cursor:  # too short to matter, or overlaps the previous range
+            continue
+        if s > cursor:
+            segments.append(Segment(kind="source", out_start_ms=out, out_end_ms=out + s - cursor, shared_start_ms=cursor))
+            out += s - cursor
+        length = round((e - s) / SPEEDUP_RATE)
+        segments.append(Segment(kind="source", out_start_ms=out, out_end_ms=out + length, shared_start_ms=s,
+                                rate=(e - s) / length))  # exact, so shared_ms covers the range to the millisecond
+        out, cursor = out + length, e
+    if hi > cursor:
+        segments.append(Segment(kind="source", out_start_ms=out, out_end_ms=out + hi - cursor, shared_start_ms=cursor))
+        out += hi - cursor
+    return out
 
 
 def build_segments(timeline: Timeline, shared_duration_ms: int) -> None:
@@ -36,12 +55,11 @@ def build_segments(timeline: Timeline, shared_duration_ms: int) -> None:
     cursor = 0
     for s, e in merged + [[shared_duration_ms, shared_duration_ms]]:
         if s > cursor:
-            segments.append(Segment(kind="source", out_start_ms=out, out_end_ms=out + s - cursor, shared_start_ms=cursor))
-            out += s - cursor
+            out = _source(segments, out, cursor, s, timeline.speedups)
         cursor = max(cursor, e)
     last = next((s for s in reversed(segments) if s.kind == "source"), None)
     if timeline.hold_ms > 0 and last:
-        held = max(last.shared_start_ms, last.shared_start_ms + last.duration_ms - 34)  # last frame at 30 fps
+        held = max(last.shared_start_ms, last.shared_start_ms + last.shared_ms - 34)  # last frame at 30 fps
         segments.append(Segment(kind="hold", out_start_ms=out, out_end_ms=out + timeline.hold_ms, shared_start_ms=held))
         out += timeline.hold_ms
     if timeline.outro_ms:
@@ -95,8 +113,11 @@ def _export_otio(ctx: Ctx, path) -> bool:
                                              name=seg.kind))
                 continue
             start = p.sync.physical_ms(seg.shared_start_ms) if role == "physical" else p.sync.system_ms(seg.shared_start_ms)
-            track.append(otio.schema.Clip(name=f"{role}@{seg.shared_start_ms}", media_reference=ref.clone(),
-                                          source_range=otio.opentime.TimeRange(rt(start), rt(seg.duration_ms))))
+            clip = otio.schema.Clip(name=f"{role}@{seg.shared_start_ms}", media_reference=ref.clone(),
+                                    source_range=otio.opentime.TimeRange(rt(start), rt(seg.shared_ms)))
+            if seg.rate != 1:
+                clip.effects.append(otio.schema.LinearTimeWarp(time_scalar=seg.rate))
+            track.append(clip)
         tl.tracks.append(track)
     otio.adapters.write_to_file(tl, str(path))
     return True
@@ -105,6 +126,7 @@ def _export_otio(ctx: Ctx, path) -> bool:
 def run(ctx: Ctx) -> str:
     p = ctx.project
     p.timeline.trim_head_ms = p.timeline.trim_tail_ms = p.timeline.hold_ms = 0  # tts re-measures these
+    p.timeline.speedups = []
     build_segments(p.timeline, p.sync.shared_duration_ms)
     out = ctx.work / "timeline"
     out.mkdir(exist_ok=True)
@@ -115,7 +137,7 @@ def run(ctx: Ctx) -> str:
         writer.writeheader()
         writer.writerows(rows)
     otio_ok = _export_otio(ctx, out / "timeline.otio")
-    cut_ms = sum(s.duration_ms for s in p.timeline.segments if s.kind == "source")
+    cut_ms = sum(s.shared_ms for s in p.timeline.segments if s.kind == "source")
     return (f"{len(p.timeline.segments)} segments, output {p.timeline.duration_ms/1000:.1f}s "
             f"({p.sync.shared_duration_ms - cut_ms} ms cut){'' if otio_ok else ' — OTIO not installed'}")
 
