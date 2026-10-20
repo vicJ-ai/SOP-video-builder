@@ -18,7 +18,7 @@ const Fonts=()=>{
 const Panel=({source,segments,role,left,width}:{source:SourceRef;segments:SegmentProp[];role:"physical"|"system";left:number;width:number})=>
  <div style={{position:"absolute",left,top:162,width,height:819,background:"#F2F2F2",overflow:"hidden"}}>
  {segments.filter(s=>(s.kind==="source"||s.kind==="hold")&&(!s.availableRoles||s.availableRoles.includes(role))).map(s=>{
- const video=<OffthreadVideo src={staticFile(source.src)} trimBefore={role==="physical"?s.physicalStartFrame:s.systemStartFrame} muted playbackRate={1} style={{width:"100%",height:"100%",objectFit:"contain"}}/>;
+ const video=<OffthreadVideo src={staticFile(source.src)} trimBefore={role==="physical"?s.physicalStartFrame:s.systemStartFrame} muted playbackRate={s.playbackRate??1} style={{width:"100%",height:"100%",objectFit:"contain"}}/>;
  return <Sequence key={s.fromFrame} from={s.fromFrame} durationInFrames={s.durationInFrames} layout="none">
  {s.kind==="hold"?<Freeze frame={0}>{video}</Freeze>:video}
  </Sequence>;})}</div>;
@@ -53,6 +53,7 @@ export const Final:React.FC<FinalProps>=(props)=>{
  <div style={{position:"absolute",left:72,top:126,fontSize:14,color:C.muted}}>{props.demo?"DEMO · ":""}{paired?"PHYSICAL + SYSTEM":physical?"PHYSICAL OPERATION · SINGLE RECORDING":"SYSTEM OPERATION · SINGLE RECORDING"}</div>
  <div style={{position:"absolute",right:230,top:126}}><Progress width={270} value={100*frame/props.durationInFrames} theme={{primary:C.purple,muted:"#E6E6E6"}}/></div>
  <Img src={staticFile("brand/item-logo.svg")} style={{position:"absolute",right:70,top:56,width:140,height:56,objectFit:"contain"}}/>
+ {(segment?.playbackRate??1)>1&&<div style={{position:"absolute",right:90,top:182,padding:"8px 18px",borderRadius:999,background:"rgba(0,0,0,.72)",color:C.white,fontSize:26,fontWeight:700,letterSpacing:.5}}>⏩ {Math.round(segment!.playbackRate!)}×</div>}
  </Backdrop>}
  {props.segments.filter(s=>s.kind==="title"||(s.kind==="intro"&&props.template!=="item-v1")).map(s=><Sequence key={s.fromFrame} from={s.fromFrame} durationInFrames={s.durationInFrames}><ItemTitle props={props}/></Sequence>)}
  {!bookend&&caption&&<div style={{position:"absolute",top:981,left:0,right:0,height:99,background:C.white,display:"flex",alignItems:"center",justifyContent:"center",padding:"6px 110px"}}><div style={{fontSize:29,fontWeight:500,lineHeight:1.3,color:C.black,textAlign:"center",maxWidth:1680}}>{caption.text}</div></div>}

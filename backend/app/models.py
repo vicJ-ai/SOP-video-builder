@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 View = Literal["system", "physical", "both"]
 StageState = Literal["pending", "running", "done", "skipped", "failed", "awaiting_review", "stale"]
 EvidenceStatus = Literal["demonstrated", "partial", "missing", "unclear"]
+SPEEDUP_RATE = 3  # fast-forwarded pauses play at 3x
 
 
 def now_iso() -> str:
@@ -118,6 +119,7 @@ class Segment(BaseModel):
     out_start_ms: int
     out_end_ms: int
     shared_start_ms: int = 0  # kind=source: first instant shown; kind=hold: the frame held
+    rate: float = 1.0  # kind=source: footage plays this many times faster (a fast-forwarded pause)
     from_frame: int | None = None  # canonical 30 fps frame schedule, set by build_segments
     duration_frames: int | None = None
     available_roles: list[str] = Field(default_factory=list)
@@ -125,6 +127,11 @@ class Segment(BaseModel):
     @property
     def duration_ms(self) -> int:
         return self.out_end_ms - self.out_start_ms
+
+    @property
+    def shared_ms(self) -> int:
+        """Footage (shared time) this segment covers."""
+        return round(self.duration_ms * self.rate)
 
 
 class Timeline(BaseModel):
@@ -136,6 +143,8 @@ class Timeline(BaseModel):
     trim_head_ms: int = 0
     trim_tail_ms: int = 0
     hold_ms: int = 0  # last footage frame held still so closing narration can finish (set by tts)
+    # Quiet shared-time ranges played at SPEEDUP_RATE (set by tts): long waits such as a screen loading.
+    speedups: list[list[int]] = Field(default_factory=list)
     segments: list[Segment] = Field(default_factory=list)  # derived; rebuilt by stages.timeline
     duration_ms: int = 0
 
@@ -161,14 +170,14 @@ class Timeline(BaseModel):
         sources = [s for s in self.segments if s.kind == "source"]
         for seg in sources:
             offset = shared_ms - seg.shared_start_ms
-            if 0 <= offset < seg.duration_ms or (offset == seg.duration_ms and seg is sources[-1]):
-                return seg.out_start_ms + offset
+            if 0 <= offset < seg.shared_ms or (offset == seg.shared_ms and seg is sources[-1]):
+                return seg.out_start_ms + min(seg.duration_ms, round(offset / seg.rate))
         return None
 
     def to_shared(self, out_ms: int) -> int | None:
         for seg in self.segments:
             if seg.kind == "source" and seg.out_start_ms <= out_ms < seg.out_end_ms:
-                return seg.shared_start_ms + out_ms - seg.out_start_ms
+                return seg.shared_start_ms + round((out_ms - seg.out_start_ms) * seg.rate)
         return None
 
     def segment_at_output(self, out_ms: int) -> Segment | None:

@@ -150,12 +150,14 @@ def render_final_ffmpeg(props: dict, public_dir: Path, out: Path, *, captions_sr
             chains.append(f"color=c=0x0a1020:s={props['width']}x{h}:r={fps}:d={dur:.3f},"
                           f"drawtext={font_file()}text='{title}':x=(w-tw)/2:y=(h-th)/2:fontsize=72:fontcolor=white[seg{i}]")
         else:
-            inputs += ["-ss", f"{seg['physicalStartFrame']/fps:.3f}", "-t", f"{dur:.3f}", "-i", str(phys)]
-            inputs += ["-ss", f"{seg['systemStartFrame']/fps:.3f}", "-t", f"{dur:.3f}", "-i", str(sys_)]
+            rate = seg.get("playbackRate", 1) or 1
+            inputs += ["-ss", f"{seg['physicalStartFrame']/fps:.3f}", "-t", f"{dur * rate:.3f}", "-i", str(phys)]
+            inputs += ["-ss", f"{seg['systemStartFrame']/fps:.3f}", "-t", f"{dur * rate:.3f}", "-i", str(sys_)]
             ip, is_ = n_video_inputs, n_video_inputs + 1
             n_video_inputs += 2
-            # a hold shows the first frame still for the whole segment
+            # a hold shows the first frame still for the whole segment; a fast-forward plays `rate` times faster
             still = f"trim=end_frame=1,tpad=stop_mode=clone:stop_duration={max(0, dur - 1 / fps):.3f}," if seg["kind"] == "hold" else ""
+            still += f"setpts=PTS/{rate:.6f}," if rate != 1 else ""
             chains.append(
                 f"[{ip}:v]{still}scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1[pa{i}];"
                 f"[{is_}:v]{still}scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1[sa{i}];"

@@ -17,7 +17,7 @@ from .. import syncalgo
 from ..captions_fmt import parse_srt
 from ..config import settings
 from ..media import decode_errors, describe, extract_frame, gray_frames
-from ..models import QACheck, QAReport
+from ..models import SPEEDUP_RATE, QACheck, QAReport
 from ..pipeline import Ctx, Stage
 from ..renderer import frames
 from ..scheduler import GAP_MS
@@ -86,10 +86,14 @@ def run(ctx: Ctx) -> str:
     bad = [s for s in props["segments"] if s["kind"] == "source"
            and abs((s["physicalStartFrame"] - s["systemStartFrame"]) - lag_frames) > 1]
     check("views synchronized in every segment", not bad, f"lag {p.sync.lag_ms} ms in {len(props['segments'])} segments")
-    src_total = sum(s.duration_ms for s in p.timeline.segments if s.kind == "source")
+    sources = [s for s in p.timeline.segments if s.kind == "source"]
+    src_total = sum(s.shared_ms for s in sources)
     cut_total = sum(e - s for s, e in p.timeline.removed(p.sync.shared_duration_ms))
-    check("no speed change (output source time == shared time - cuts)",
-          abs(src_total - (p.sync.shared_duration_ms - max(0, cut_total))) <= 2, f"{src_total} ms of source footage")
+    fast = [s for s in sources if s.rate != 1]
+    check("speed changes only in marked fast-forwards (all footage accounted for)",
+          abs(src_total - (p.sync.shared_duration_ms - max(0, cut_total))) <= 2 * (1 + len(fast))
+          and all(abs(s.rate - SPEEDUP_RATE) < 0.1 for s in fast),
+          f"{src_total} ms of source footage; {len(fast)} fast-forwarded pause(s)")
     unconfirmed = [c.label for c in p.sync.checks if not c.ok]
     check("sync landmarks verified (start/middle/end)", not unconfirmed or p.sync.manual,
           "manual offset set by reviewer" if p.sync.manual else (f"unconfirmed: {', '.join(unconfirmed)}" if unconfirmed else "all confirmed"),
@@ -106,6 +110,8 @@ def run(ctx: Ctx) -> str:
         if seg is None or seg.kind not in home or c.out_end_ms > p.timeline.extent(seg):
             crossing.append(c.id)
     check("no narration crosses a cut or the intro", not crossing, ", ".join(crossing[:5]))
+    fast_talk = [c.id for c in live for s in fast if c.out_start_ms < s.out_end_ms and c.out_end_ms > s.out_start_ms]
+    check("no narration during a fast-forward", not fast_talk, ", ".join(fast_talk[:5]) or f"{len(fast)} fast stretch(es)")
     live = [c for c in live if c.phase == "operational"]  # evidence checks apply to footage narration
     unsupported = []
     for c in live:

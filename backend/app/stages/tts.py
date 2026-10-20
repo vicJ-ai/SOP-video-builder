@@ -5,8 +5,9 @@ still does not fit is dropped and reported (never sped up, never cut mid-instruc
 Audio is cached by (text, voice), so editing one line regenerates only that clip.
 
 Narrated videos mute the original audio, so footage before the first narrated action or after the last
-line plays as dead air; it is trimmed, keeping a short lead-in and tail. When the closing lines run past
-the end of the recording, its last frame is held still (briefly) so they can finish.
+line plays as dead air; it is trimmed, keeping a short lead-in and tail. Long quiet waits between lines
+(a screen loading) play at 3x. When the closing lines run past the end of the recording, its last frame
+is held still (briefly) so they can finish.
 """
 
 from __future__ import annotations
@@ -25,6 +26,26 @@ HEAD_PAD_MS = 1500  # footage kept before the first narrated action
 TAIL_PAD_MS = 1500  # footage kept after the last line finishes
 MIN_TRIM_MS = 2000  # a shorter silence is not worth a cut
 MAX_HOLD_MS = 6000  # longest still ending added so the closing lines can finish
+PAUSE_MIN_MS = 3000  # a quiet stretch between lines this long is fast-forwarded
+PAUSE_PAD_MS = 750  # footage kept at normal speed on each side of it
+MIN_FAST_MS = 1500  # a shorter fast-forward is not worth the speed change
+
+
+def quiet_ranges(p, cues) -> list[list[int]]:
+    """Shared-time ranges between narration lines long enough to fast-forward (nothing is said there)."""
+    tl = p.timeline
+    live = sorted((c for c in cues if not c.dropped and c.out_start_ms is not None), key=lambda c: c.out_start_ms)
+    out = []
+    for a, b in zip(live, live[1:]):
+        if b.out_start_ms - a.out_end_ms < PAUSE_MIN_MS:
+            continue
+        lo = a.out_end_ms + PAUSE_PAD_MS
+        hi = min(b.out_start_ms, b.anchor_out_ms if b.anchor_out_ms is not None else b.out_start_ms) - PAUSE_PAD_MS
+        seg = tl.segment_at_output(lo)
+        if hi - lo < MIN_FAST_MS or seg is None or seg.kind != "source" or seg is not tl.segment_at_output(hi - 1):
+            continue  # too short once padded, or crosses a cut
+        out.append([tl.to_shared(lo), tl.to_shared(hi)])
+    return out
 
 
 def _inputs(p):
@@ -63,6 +84,7 @@ def run(ctx: Ctx) -> str:
     # Start the footage shortly before the first narrated action (measured on the untrimmed timeline).
     tl, dur = p.timeline, p.sync.shared_duration_ms
     tl.trim_head_ms = tl.trim_tail_ms = tl.hold_ms = 0
+    tl.speedups = []
     build_segments(tl, dur)
     starts = [events[c.event_id].start_ms for c in footage_cues if c.event_id in events]
     head = min(starts) - HEAD_PAD_MS if starts else 0
@@ -119,6 +141,23 @@ def run(ctx: Ctx) -> str:
 
     late = place()
     lost = sum(c.dropped for c in footage_cues)
+
+    # Fast-forward long quiet waits between lines (a screen loading). Keep it only if every line still
+    # fits and none plays during a fast stretch; otherwise the video stays at normal speed.
+    if fast := quiet_ranges(p, footage_cues):
+        tl.speedups = fast
+        build_segments(tl, dur)
+        late_fast = place()
+        fast_segs = [s for s in tl.segments if s.rate != 1]
+        talking = any(c.out_start_ms < s.out_end_ms and c.out_end_ms > s.out_start_ms
+                      for c in footage_cues if not c.dropped for s in fast_segs)
+        if sum(c.dropped for c in footage_cues) > lost or talking:
+            tl.speedups = []
+            build_segments(tl, dur)
+            late = place()
+        else:
+            late = late_fast
+
     if lost:
         # Closing lines that run past the recording: hold its last frame still so they can finish.
         tl.hold_ms = MAX_HOLD_MS
@@ -136,7 +175,7 @@ def run(ctx: Ctx) -> str:
     # placed moves; scheduling again keeps every check on the final timeline.
     sources = [s for s in tl.segments if s.kind == "source"]
     ends = live_ends()
-    if not tl.hold_ms and sources and ends and max(ends) >= sources[-1].out_start_ms:
+    if not tl.hold_ms and sources and sources[-1].rate == 1 and ends and max(ends) >= sources[-1].out_start_ms:
         tail = sources[-1].out_end_ms - (max(ends) + TAIL_PAD_MS)
         if tail >= MIN_TRIM_MS:
             tl.trim_tail_ms = tail
@@ -146,14 +185,17 @@ def run(ctx: Ctx) -> str:
     from ..frameclock import resolve_cues
     resolve_cues(p)  # one 30 fps frame schedule for the renderer, captions and sidecars
     ctx.provenance("tts", provider=tts.name, voice=tts.voice_id(), trim_head_ms=tl.trim_head_ms,
-                   trim_tail_ms=tl.trim_tail_ms, hold_ms=tl.hold_ms)
+                   trim_tail_ms=tl.trim_tail_ms, hold_ms=tl.hold_ms, speedups=tl.speedups)
     dropped = sum(c.dropped for c in p.cues)
     total = sum(c.duration_ms for c in p.cues if not c.dropped)
     trimmed = (f"; trimmed {tl.trim_head_ms/1000:.1f}s silence at start, {tl.trim_tail_ms/1000:.1f}s at end"
                if tl.trim_head_ms or tl.trim_tail_ms else "")
     trimmed += f"; held the last frame {tl.hold_ms/1000:.1f}s for the closing lines" if tl.hold_ms else ""
+    if fast_segs := [s for s in tl.segments if s.rate != 1]:
+        trimmed += (f"; fast-forwarded {len(fast_segs)} pause{'s' if len(fast_segs) > 1 else ''} "
+                    f"({sum(s.shared_ms for s in fast_segs)/1000:.1f}s -> {sum(s.duration_ms for s in fast_segs)/1000:.1f}s)")
     return (f"{len(p.cues) - dropped} clips ({total/1000:.1f}s speech) via {tts.name}; {shortened} shortened, "
             f"{late} timing warnings, {dropped} dropped{trimmed}")
 
 
-STAGE = Stage("tts", "Voice & schedule narration", "5", _inputs, run)
+STAGE = Stage("tts", "Voice & schedule narration", "6", _inputs, run)

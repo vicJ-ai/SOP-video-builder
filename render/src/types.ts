@@ -16,6 +16,7 @@ export interface SegmentProp {
   durationInFrames: number;
   physicalStartFrame: number; // first source frame to show (trimBefore)
   systemStartFrame: number;
+  playbackRate?: number; // >1: a fast-forwarded quiet wait
 }
 
 export interface CueProp {
