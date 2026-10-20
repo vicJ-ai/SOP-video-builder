@@ -87,7 +87,7 @@ def run(ctx: Ctx) -> str:
            and abs((s["physicalStartFrame"] - s["systemStartFrame"]) - lag_frames) > 1]
     check("views synchronized in every segment", not bad, f"lag {p.sync.lag_ms} ms in {len(props['segments'])} segments")
     src_total = sum(s.duration_ms for s in p.timeline.segments if s.kind == "source")
-    cut_total = sum(min(c.end_ms, p.sync.shared_duration_ms) - max(c.start_ms, 0) for c in p.timeline.cuts)
+    cut_total = sum(e - s for s, e in p.timeline.removed(p.sync.shared_duration_ms))
     check("no speed change (output source time == shared time - cuts)",
           abs(src_total - (p.sync.shared_duration_ms - max(0, cut_total))) <= 2, f"{src_total} ms of source footage")
     unconfirmed = [c.label for c in p.sync.checks if not c.ok]
@@ -102,8 +102,8 @@ def run(ctx: Ctx) -> str:
     crossing = []
     for c in live:
         seg = p.timeline.segment_at_output(c.out_start_ms)
-        home = "title" if c.phase == "title" else "source"  # the title + introduction belongs on the title card
-        if seg is None or seg.kind != home or c.out_end_ms > seg.out_end_ms:
+        home = ("title",) if c.phase == "title" else ("source", "hold")  # the title + introduction belongs on the title card
+        if seg is None or seg.kind not in home or c.out_end_ms > p.timeline.extent(seg):
             crossing.append(c.id)
     check("no narration crosses a cut or the intro", not crossing, ", ".join(crossing[:5]))
     live = [c for c in live if c.phase == "operational"]  # evidence checks apply to footage narration
@@ -158,8 +158,10 @@ def run(ctx: Ctx) -> str:
 
     # --- frozen footage
     intro_end = next((s.out_end_ms for s in p.timeline.segments if s.kind == "intro"), 0)
+    footage_end = max((s.out_end_ms for s in p.timeline.segments if s.kind == "source"), default=0)
     frozen = []
     for s, e in freezes(final):
+        e = min(e, footage_end)  # the deliberate end hold is not a freeze
         if e <= intro_end + 200:
             continue
         shared = p.timeline.to_shared(max(s, intro_end))

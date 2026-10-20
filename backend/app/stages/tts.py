@@ -3,6 +3,10 @@
 Only a line that would play across a cut is shortened, and only by removing filler words; a line that
 still does not fit is dropped and reported (never sped up, never cut mid-instruction, never by freezing footage).
 Audio is cached by (text, voice), so editing one line regenerates only that clip.
+
+Narrated videos mute the original audio, so footage before the first narrated action or after the last
+line plays as dead air; it is trimmed, keeping a short lead-in and tail. When the closing lines run past
+the end of the recording, its last frame is held still (briefly) so they can finish.
 """
 
 from __future__ import annotations
@@ -13,9 +17,14 @@ from ..pipeline import Ctx, Stage
 from ..providers.tts import get_tts
 from ..scheduler import schedule
 from ..store import stable_hash
+from .timeline import build_segments
 from .title_voice import LEAD_MS
 
 MAX_SHORTEN_PASSES = 3
+HEAD_PAD_MS = 1500  # footage kept before the first narrated action
+TAIL_PAD_MS = 1500  # footage kept after the last line finishes
+MIN_TRIM_MS = 2000  # a shorter silence is not worth a cut
+MAX_HOLD_MS = 6000  # longest still ending added so the closing lines can finish
 
 
 def _inputs(p):
@@ -50,6 +59,17 @@ def run(ctx: Ctx) -> str:
     # The title + introduction plays on the title card, not on the footage scheduler.
     title_cues = [c for c in p.cues if c.phase == "title"]
     footage_cues = [c for c in p.cues if c.phase == "operational"]
+
+    # Start the footage shortly before the first narrated action (measured on the untrimmed timeline).
+    tl, dur = p.timeline, p.sync.shared_duration_ms
+    tl.trim_head_ms = tl.trim_tail_ms = tl.hold_ms = 0
+    build_segments(tl, dur)
+    starts = [events[c.event_id].start_ms for c in footage_cues if c.event_id in events]
+    head = min(starts) - HEAD_PAD_MS if starts else 0
+    if head >= MIN_TRIM_MS:
+        tl.trim_head_ms = head
+        build_segments(tl, dur)
+
     card = next((s for s in p.timeline.segments if s.kind == "title"), None)
     for cue in title_cues:
         cue.anchor_out_ms = None
@@ -83,22 +103,57 @@ def run(ctx: Ctx) -> str:
         if not changed:
             break
 
-    final = schedule(footage_cues, events, p.timeline, finalize=True)
-    late = 0
-    for pl in final:
-        cue = by_id[pl.cue_id]
-        cue.out_start_ms, cue.out_end_ms, cue.anchor_out_ms = pl.start, pl.end, pl.anchor
-        cue.dropped = pl.dropped
-        cue.schedule_notes = pl.notes + ([f"shortened from: {cue.text}"] if cue.spoken_text else [])
-        if pl.late_ms or pl.overrun_ms:
-            late += 1
+    def place() -> int:
+        late = 0
+        for pl in schedule(footage_cues, events, p.timeline, finalize=True):
+            cue = by_id[pl.cue_id]
+            cue.out_start_ms, cue.out_end_ms, cue.anchor_out_ms = pl.start, pl.end, pl.anchor
+            cue.dropped = pl.dropped
+            cue.schedule_notes = pl.notes + ([f"shortened from: {cue.text}"] if cue.spoken_text else [])
+            if pl.late_ms or pl.overrun_ms:
+                late += 1
+        return late
+
+    def live_ends() -> list[int]:
+        return [c.out_end_ms for c in footage_cues if not c.dropped and c.out_end_ms is not None]
+
+    late = place()
+    lost = sum(c.dropped for c in footage_cues)
+    if lost:
+        # Closing lines that run past the recording: hold its last frame still so they can finish.
+        tl.hold_ms = MAX_HOLD_MS
+        build_segments(tl, dur)
+        place()
+        if sum(c.dropped for c in footage_cues) < lost:
+            last = next(s for s in reversed(tl.segments) if s.kind == "source")
+            tl.hold_ms = min(MAX_HOLD_MS, max(0, max(live_ends()) + TAIL_PAD_MS - last.out_end_ms))
+        else:
+            tl.hold_ms = 0
+        build_segments(tl, dur)
+        late = place()
+
+    # End the footage shortly after the last line. Only the final stretch shrinks, so nothing already
+    # placed moves; scheduling again keeps every check on the final timeline.
+    sources = [s for s in tl.segments if s.kind == "source"]
+    ends = live_ends()
+    if not tl.hold_ms and sources and ends and max(ends) >= sources[-1].out_start_ms:
+        tail = sources[-1].out_end_ms - (max(ends) + TAIL_PAD_MS)
+        if tail >= MIN_TRIM_MS:
+            tl.trim_tail_ms = tail
+            build_segments(tl, dur)
+            late = place()
+
     from ..frameclock import resolve_cues
     resolve_cues(p)  # one 30 fps frame schedule for the renderer, captions and sidecars
-    ctx.provenance("tts", provider=tts.name, voice=tts.voice_id())
+    ctx.provenance("tts", provider=tts.name, voice=tts.voice_id(), trim_head_ms=tl.trim_head_ms,
+                   trim_tail_ms=tl.trim_tail_ms, hold_ms=tl.hold_ms)
     dropped = sum(c.dropped for c in p.cues)
     total = sum(c.duration_ms for c in p.cues if not c.dropped)
+    trimmed = (f"; trimmed {tl.trim_head_ms/1000:.1f}s silence at start, {tl.trim_tail_ms/1000:.1f}s at end"
+               if tl.trim_head_ms or tl.trim_tail_ms else "")
+    trimmed += f"; held the last frame {tl.hold_ms/1000:.1f}s for the closing lines" if tl.hold_ms else ""
     return (f"{len(p.cues) - dropped} clips ({total/1000:.1f}s speech) via {tts.name}; {shortened} shortened, "
-            f"{late} timing warnings, {dropped} dropped")
+            f"{late} timing warnings, {dropped} dropped{trimmed}")
 
 
-STAGE = Stage("tts", "Voice & schedule narration", "3", _inputs, run)
+STAGE = Stage("tts", "Voice & schedule narration", "5", _inputs, run)

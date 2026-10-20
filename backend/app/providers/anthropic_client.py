@@ -13,6 +13,7 @@ import anthropic
 from pydantic import BaseModel, ValidationError
 
 from ..config import settings
+from .errors import ClaudeAccountError, ClaudeError
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -29,8 +30,6 @@ def reset_usage() -> None:
     usage.update(calls=0, input_tokens=0, output_tokens=0)
 
 
-class ClaudeError(RuntimeError):
-    pass
 
 
 def _content(content) -> str | list[dict]:
@@ -74,16 +73,18 @@ class ClaudeClient:
         try:
             return self.client.beta.messages.parse(**kwargs)
         except anthropic.AuthenticationError:
-            raise ClaudeError("Anthropic did not accept this API key.") from None
+            raise ClaudeAccountError("Anthropic did not accept this API key. Put a valid key in VLM_API_KEY "
+                                     "(backend/.env), restart the app, then Retry.") from None
         except anthropic.PermissionDeniedError:
-            raise ClaudeError("This Anthropic key does not have permission for the selected model.") from None
+            raise ClaudeAccountError("This Anthropic key does not have permission for the selected model.") from None
         except anthropic.NotFoundError:
-            raise ClaudeError("Anthropic does not recognise the configured model. Check VLM_MODEL.") from None
+            raise ClaudeAccountError("Anthropic does not recognise the configured model. Check VLM_MODEL.") from None
         except anthropic.RateLimitError:
             raise ClaudeError("Anthropic rate limit reached. Retry later.") from None
         except anthropic.BadRequestError as exc:
             if "credit balance" in str(exc).lower():
-                raise ClaudeError("Anthropic account credit is too low. Add credit in the Claude Console.") from None
+                raise ClaudeAccountError("Anthropic account credit is too low. Add credit in the Claude Console, "
+                                         "then Retry.") from None
             raise ClaudeError(f"Anthropic rejected the request: {exc.message}") from None
         except anthropic.APIConnectionError:
             raise ClaudeError("Anthropic could not be reached. Check network access and retry.") from None

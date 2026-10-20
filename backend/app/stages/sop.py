@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from ..models import Coverage, Discrepancy, Event, StepCoverage
 from ..pipeline import Ctx, Stage
+from ..providers.errors import ClaudeAccountError
 from ..providers.llm import get_llm
 from ..sopparse import parse_intro, parse_sop
 from .ocr import text_present
@@ -146,6 +147,8 @@ def _llm_refine(events: list[Event], steps, proposed: dict[str, str | None]) -> 
                                           "An event may match no step (null). Never assume an unobserved action."},
             {"role": "user", "content": str(payload)},
         ], LlmAlignment)
+    except ClaudeAccountError:
+        raise
     except Exception as exc:  # noqa: BLE001
         log.warning("LLM refinement failed: %s", exc)
         return None

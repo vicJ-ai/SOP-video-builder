@@ -27,8 +27,8 @@ def build_layout(p) -> list[LayoutKey]:
     order = {s.id: i + 1 for i, s in enumerate(p.sop_steps)}
     keys: list[LayoutKey] = []
     events = {e.id: e for e in p.live_events()}
-    sources = [s for s in p.timeline.segments if s.kind == "source"]
-    # Layout only applies over real footage: after the intro/title card, before the outro.
+    sources = [s for s in p.timeline.segments if s.kind in ("source", "hold")]
+    # Layout only applies over real footage (and its end hold): after the intro/title card, before the outro.
     intro_end = sources[0].out_start_ms if sources else 0
     footage_end = sources[-1].out_end_ms if sources else p.timeline.duration_ms
     for cue in sorted((c for c in p.cues if not c.dropped and c.anchor_out_ms is not None), key=lambda c: c.anchor_out_ms):

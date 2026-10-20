@@ -94,8 +94,13 @@ def test_api_errors_become_actionable_messages():
         c.structured(_image_message(), Answer)
     bad_key = anthropic.AuthenticationError("invalid x-api-key", response=httpx.Response(401, request=request), body=None)
     c, _ = _client(bad_key)
-    with pytest.raises(claude.ClaudeError, match="did not accept"):
+    with pytest.raises(claude.ClaudeAccountError, match="did not accept"):
         c.structured(_image_message(), Answer)
+    limited = anthropic.RateLimitError("slow down", response=httpx.Response(429, request=request), body=None)
+    c, _ = _client(limited)
+    with pytest.raises(claude.ClaudeError) as caught:  # passing: not an account problem
+        c.structured(_image_message(), Answer)
+    assert not isinstance(caught.value, claude.ClaudeAccountError)
 
 
 def test_budget_exhaustion_blocks_before_calling():

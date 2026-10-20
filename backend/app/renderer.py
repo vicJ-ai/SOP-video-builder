@@ -154,9 +154,11 @@ def render_final_ffmpeg(props: dict, public_dir: Path, out: Path, *, captions_sr
             inputs += ["-ss", f"{seg['systemStartFrame']/fps:.3f}", "-t", f"{dur:.3f}", "-i", str(sys_)]
             ip, is_ = n_video_inputs, n_video_inputs + 1
             n_video_inputs += 2
+            # a hold shows the first frame still for the whole segment
+            still = f"trim=end_frame=1,tpad=stop_mode=clone:stop_duration={max(0, dur - 1 / fps):.3f}," if seg["kind"] == "hold" else ""
             chains.append(
-                f"[{ip}:v]scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1[pa{i}];"
-                f"[{is_}:v]scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1[sa{i}];"
+                f"[{ip}:v]{still}scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1[pa{i}];"
+                f"[{is_}:v]{still}scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1[sa{i}];"
                 f"[pa{i}][sa{i}]hstack=inputs=2,fps={fps}[seg{i}]"
             )
         concat.append(f"[seg{i}]")

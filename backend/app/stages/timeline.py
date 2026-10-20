@@ -23,15 +23,7 @@ def _inputs(p):
 
 
 def build_segments(timeline: Timeline, shared_duration_ms: int) -> None:
-    cuts = sorted(
-        ((max(0, c.start_ms), min(shared_duration_ms, c.end_ms)) for c in timeline.cuts if c.end_ms > c.start_ms),
-    )
-    merged: list[list[int]] = []
-    for s, e in cuts:
-        if merged and s <= merged[-1][1]:
-            merged[-1][1] = max(merged[-1][1], e)
-        elif e > s:
-            merged.append([s, e])
+    merged = timeline.removed(shared_duration_ms)
 
     segments: list[Segment] = []
     out = 0
@@ -47,6 +39,11 @@ def build_segments(timeline: Timeline, shared_duration_ms: int) -> None:
             segments.append(Segment(kind="source", out_start_ms=out, out_end_ms=out + s - cursor, shared_start_ms=cursor))
             out += s - cursor
         cursor = max(cursor, e)
+    last = next((s for s in reversed(segments) if s.kind == "source"), None)
+    if timeline.hold_ms > 0 and last:
+        held = max(last.shared_start_ms, last.shared_start_ms + last.duration_ms - 34)  # last frame at 30 fps
+        segments.append(Segment(kind="hold", out_start_ms=out, out_end_ms=out + timeline.hold_ms, shared_start_ms=held))
+        out += timeline.hold_ms
     if timeline.outro_ms:
         segments.append(Segment(kind="outro", out_start_ms=out, out_end_ms=out + timeline.outro_ms))
         out += timeline.outro_ms
@@ -107,6 +104,7 @@ def _export_otio(ctx: Ctx, path) -> bool:
 
 def run(ctx: Ctx) -> str:
     p = ctx.project
+    p.timeline.trim_head_ms = p.timeline.trim_tail_ms = p.timeline.hold_ms = 0  # tts re-measures these
     build_segments(p.timeline, p.sync.shared_duration_ms)
     out = ctx.work / "timeline"
     out.mkdir(exist_ok=True)

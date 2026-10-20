@@ -15,8 +15,8 @@ def resolve_cues(project, fps: int = 30) -> None:
         duration = max(1, ceil(cue.duration_ms * fps / 1000))
         end = start + duration
         segment = project.timeline.segment_at_output(round(start * 1000 / fps))
-        required = {"opener": "intro", "title": "title", "operational": "source"}[cue.phase]
-        if not segment or segment.kind != required or end > round(segment.out_end_ms * fps / 1000):
+        allowed = {"opener": ("intro",), "title": ("title",), "operational": ("source", "hold")}[cue.phase]
+        if not segment or segment.kind not in allowed or end > round(project.timeline.extent(segment) * fps / 1000):
             cue.dropped = True
             cue.schedule_notes.append("measured speech exceeds canonical phase/cut boundary; no speedup")
             continue

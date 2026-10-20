@@ -72,13 +72,14 @@ def schedule(cues: list[NarrationCue], events: dict[str, Event], timeline: Timel
             p.late_ms = start - latest
             p.notes.append(f"starts {p.late_ms} ms after its action (previous line still speaking)")
         next_anchor = next((a for a in anchors if a > anchor), None)
-        limit = seg.out_end_ms
+        seg_end = timeline.extent(seg)  # includes a still hold after the last footage
+        limit = seg_end
         if next_anchor is not None:
             limit = min(limit, max(next_anchor + NEXT_ACTION_SLACK_MS, start))
         if p.end > limit:
             p.overrun_ms = p.end - limit
             p.notes.append(f"{p.overrun_ms} ms too long for its window")
-        if p.end > seg.out_end_ms:
+        if p.end > seg_end:
             p.crosses_segment = True
             p.notes.append("would play across a cut / past the end of the footage")
             if finalize:
