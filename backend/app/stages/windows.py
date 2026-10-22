@@ -1,7 +1,7 @@
 """8. Candidate action windows from cheap signals.
 
 Warehouse SOP footage is mostly long continuous shots, so scene cuts alone are not enough:
-combine WISE screen changes, physical motion, audio peaks (scanner beeps, taps) and PySceneDetect.
+combine WMS screen changes, physical motion, audio peaks (scanner beeps, taps) and PySceneDetect.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import numpy as np
 from .. import syncalgo
 from ..media import audio_samples, gray_frames
 from ..models import CandidateWindow
-from ..pipeline import Ctx, Stage
+from ..pipeline import Ctx, Skip, Stage
 
 FPS = 4.0
 PAD_MS = 500
@@ -19,6 +19,8 @@ MAX_WINDOW_MS = 8000
 
 
 def _inputs(p):
+    if p.mode == "demo":
+        return {"dur": p.sync.shared_duration_ms, "demo": [[m.role, m.sha256] for m in p.sources()]}
     return {"sync": [p.sync.lag_ms, p.sync.shared_start_physical_ms, p.sync.shared_duration_ms],
             "sha": [p.physical.sha256, p.system.sha256]}
 
@@ -49,20 +51,26 @@ def _scenedetect(ctx: Ctx, role: str, start_ms: int, dur_ms: int) -> list[int]:
 
 def run(ctx: Ctx) -> str:
     p = ctx.project
+    if p.mode == "demo":
+        p.windows = []
+        raise Skip("the presenter's speech marks each action")
     dur = p.sync.shared_duration_ms
     spans: list[tuple[int, int, str, str, float]] = []  # start, end, signal, view, strength
 
-    sys_frames = gray_frames(ctx.proxy("system"), fps=FPS, start_ms=p.sync.system_ms(0), dur_ms=dur)
-    phys_frames = gray_frames(ctx.proxy("physical"), fps=FPS, start_ms=p.sync.physical_ms(0), dur_ms=dur)
-    for s, e in _runs(syncalgo.activity_mask(sys_frames, threshold=2.5), FPS):
-        spans.append((s, e, "screen-change", "system", 1.0))
-    for s, e in _runs(syncalgo.activity_mask(phys_frames, threshold=8.0), FPS):
-        if e - s >= 500:
-            spans.append((s, e, "motion", "physical", 0.6))
+    roles = [m.role for m in p.sources()]  # both, or the one recording of a demo video
+    if "system" in roles:
+        sys_frames = gray_frames(ctx.proxy("system"), fps=FPS, start_ms=p.sync.system_ms(0), dur_ms=dur)
+        for s, e in _runs(syncalgo.activity_mask(sys_frames, threshold=2.5), FPS):
+            spans.append((s, e, "screen-change", "system", 1.0))
+    if "physical" in roles:
+        phys_frames = gray_frames(ctx.proxy("physical"), fps=FPS, start_ms=p.sync.physical_ms(0), dur_ms=dur)
+        for s, e in _runs(syncalgo.activity_mask(phys_frames, threshold=8.0), FPS):
+            if e - s >= 500:
+                spans.append((s, e, "motion", "physical", 0.6))
 
     for role in ("physical", "system"):
         media = getattr(p, role)
-        if not media.has_audio:
+        if media is None or not media.has_audio:
             continue
         start = p.sync.physical_ms(0) if role == "physical" else p.sync.system_ms(0)
         env = syncalgo.onset_envelope(audio_samples(ctx.proxy(role), sr=8000, start_ms=start, dur_ms=dur), 8000)
@@ -76,7 +84,7 @@ def run(ctx: Ctx) -> str:
             if ms - last > 400:
                 spans.append((ms, ms + 200, "audio-peak", "both", 0.8))
                 last = ms
-    for role in ("system", "physical"):
+    for role in (r for r in ("system", "physical") if r in roles):
         start = p.sync.physical_ms(0) if role == "physical" else p.sync.system_ms(0)
         for cut in _scenedetect(ctx, role, start, dur):
             spans.append((cut, cut + 250, f"scene-cut:{role}", role, 0.7))

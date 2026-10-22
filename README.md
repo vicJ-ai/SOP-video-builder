@@ -1,6 +1,6 @@
 # UNIS SOP Video Builder
 
-Turns **two raw recordings** (the physical warehouse work and the WISE system screen) plus the
+Turns **two raw recordings** (the physical warehouse work and the WMS system screen) plus the
 **SOP Markdown file** into a verified, narrated, captioned training video, together with a report of
 which SOP steps the footage actually demonstrates.
 
@@ -61,14 +61,14 @@ prompted JSON with validation and a retry.
 | Footage outside the shared interval flagged, not discarded | `SyncResult.outside` (motion / screen-change activity), shown in the Sync tab |
 | Remocn/Remotion analysis preview | `render/src/Preview.tsx`: both views, stable labels, burned-in shared timecode, no overlays |
 | Timestamped transcript as context, never proof | `stages/transcribe.py`. In `stages/sop.py`, a spoken-only step becomes `unclear` + `speech-only`, never `demonstrated`. |
-| Qwen3-VL action timeline, closer look at quick actions | `stages/analyze.py`: a coarse pass over the preview, then a fine pass (higher fps, **original** WISE frames) on short windows from `stages/windows.py`. Output is Pydantic-validated and clamped. Human edits always win. |
+| Qwen3-VL action timeline, closer look at quick actions | `stages/analyze.py`: a coarse pass over the preview, then a fine pass (higher fps, **original** WMS frames) on short windows from `stages/windows.py`. Output is Pydantic-validated and clamped. Human edits always win. |
 | Compare with SOP: demonstrated / partial / missing / unclear, flag differences, never invent | `sopparse.py` + `stages/sop.py`: order-preserving DP alignment with IDF weighting, control-name and completion-evidence checks, and the flags `not-in-sop`, `out-of-order`, `control-mismatch`, `speech-only` and `missing-completion-evidence` |
 | Narration per event, exact control names, reviewable | `stages/narrate.py` + `narration.py`. Unverified names or low confidence mark a line `needs_review`. The `narration_review` gate pauses before TTS. |
 | TTS per line, measured, scheduled at/before the action, results only after evidence, shorten instead of slowing down | `stages/tts.py` + `scheduler.py` (pure, unit-tested). Hard rules: no overlap, never crosses a cut, a result never plays before it's visible, no speed changes or freezes. |
 | One shared editing timeline for cuts and intro | `models.Timeline` + `stages/timeline.py`. Everything is stored in shared time and projected to output time. OTIO export. |
-| Voice, burned captions, Remocn design, muted source audio | `render/src/Final.tsx`: Remocn `caption-subtitle`, `progress`, `stepper`, `soft-blur-in`, `fade-through`, `toast`, `backdrop`. The layout is driven by event type (WISE enlarged for system actions, floor for handling, split for cross-view). |
+| Voice, burned captions, Remocn design, muted source audio | `render/src/Final.tsx`: Remocn `caption-subtitle`, `progress`, `stepper`, `soft-blur-in`, `fade-through`, `toast`, `backdrop`. The layout is driven by event type (WMS enlarged for system actions, floor for handling, split for cross-view). |
 | Draft preview, corrections without restarting | `draft` stage + `draft_review` gate. Input-hash caching means editing a line reruns only TTS → captions → render → QA. |
-| Final QA | `stages/qa.py` checks strict decode, resolution, fps, pix_fmt, duration and frame count, fast-start, per-segment sync offset, no speed change, no overlap, no cue across cuts, captions equal to the schedule, WISE readability, completion claims backed by evidence, frozen footage and traceability. It also exports representative frames for a human check. |
+| Final QA | `stages/qa.py` checks strict decode, resolution, fps, pix_fmt, duration and frame count, fast-start, per-segment sync offset, no speed change, no overlap, no cue across cuts, captions equal to the schedule, WMS readability, completion claims backed by evidence, frozen footage and traceability. It also exports representative frames for a human check. |
 | Deliverables | `out/`: `final.mp4`, `final_720p.mp4`, `narration_transcript.txt`, `captions.srt/.vtt`, `narration_timing.csv`, `source_time_map.csv/.json`, `timeline.otio`, `sop_coverage_report.md/.json`, `qa_report.md/.json`, `poster.jpg`, `manifest.json` (provenance), `project.json` (editable), plus a single zip |
 
 ## Layout

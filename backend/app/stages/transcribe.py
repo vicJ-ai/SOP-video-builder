@@ -25,6 +25,9 @@ MAX_SEGMENT_MS = 12_000  # Whisper can return a minute-long segment; split at wo
 
 
 def _inputs(p):
+    if p.mode == "demo":
+        return {"demo": [[m.role, m.sha256, m.has_audio] for m in p.sources()], "dur": p.sync.shared_duration_ms,
+                "model": settings.asr_model, "translate": [settings.llm_provider, settings.llm_model]}
     return {"sha": [p.physical.sha256, p.system.sha256], "audio": [p.physical.has_audio, p.system.has_audio],
             "sync": [p.sync.lag_ms, p.sync.shared_start_physical_ms, p.sync.shared_duration_ms],
             "model": settings.asr_model, "translate": [settings.llm_provider, settings.llm_model]}
@@ -99,7 +102,7 @@ def _translate(ctx: Ctx, segments: list[TranscriptSegment]) -> str:
 
 def run(ctx: Ctx) -> str:
     p = ctx.project
-    roles = [m.role for m in (p.physical, p.system) if m.has_audio]
+    roles = [m.role for m in p.sources() if m.has_audio]
     if not roles:
         p.transcript, p.transcript_status = [], "no audio"
         raise Skip("neither recording has audio")

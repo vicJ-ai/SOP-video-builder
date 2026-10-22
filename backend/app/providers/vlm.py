@@ -58,6 +58,10 @@ class Vlm:
     def read_text(self, jpeg: bytes) -> list[str]:  # pragma: no cover
         raise NotImplementedError
 
+    def look(self, frames: list[Frame], *, instruction: str, schema):  # pragma: no cover
+        """Frames + an instruction, answered in a caller-chosen schema."""
+        raise NotImplementedError
+
 
 class OpenAIVlm(Vlm):
     name = "openai"
@@ -77,6 +81,14 @@ class OpenAIVlm(Vlm):
                                                 "start_s, end_s, view, action, kind, visible_text, confidence."})
         return self.client.structured(
             [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": content}], VlmEvents)
+
+    def look(self, frames: list[Frame], *, instruction: str, schema):
+        content: list[dict] = [{"type": "text", "text": instruction}]
+        for f in frames:
+            content.append({"type": "text", "text": f"[{f.label} t={f.t_ms / 1000:.2f}s]"})
+            content.append(image_part(f.jpeg))
+        return self.client.structured([{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": content}],
+                                      schema)
 
     def read_text(self, jpeg: bytes) -> list[str]:
         out = self.client.structured([

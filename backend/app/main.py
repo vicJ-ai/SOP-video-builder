@@ -115,7 +115,7 @@ def _summary(p: Project) -> dict:
     return {"id": p.id, "title": p.title, "created_at": p.created_at, "updated_at": p.updated_at,
             "progress": done / max(1, len(states)), "current": current,
             "current_state": states[current].state if current else ("done" if done == len(states) else "pending"),
-            "running": runner.is_running(p.id)}
+            "running": runner.is_running(p.id), "mode": p.mode}
 
 
 # --------------------------------------------------------------------------- environment
@@ -151,15 +151,20 @@ def list_projects():
 
 @app.post("/api/projects")
 async def create_project(
-    title: str = Form(...), physical: UploadFile = File(...), system: UploadFile = File(...),
-    sop: UploadFile = File(...), auto_start: bool = Form(True), auto_approve: bool = Form(False),
+    title: str = Form(""), physical: UploadFile | None = File(None), system: UploadFile | None = File(None),
+    sop: UploadFile | None = File(None), notes: UploadFile | None = File(None),
+    mode: Literal["sop", "demo"] = Form("sop"), auto_start: bool = Form(True), auto_approve: bool = Form(False),
 ):
+    if mode == "demo":
+        return await _create_demo(title, physical, system, notes, auto_start, auto_approve)
+    if not (physical and system and sop):
+        raise HTTPException(400, "a Warehouse SOP Video needs a floor recording, a WMS recording and the SOP (.md)")
     for f, kind in ((physical, "physical"), (system, "system")):
         if Path(f.filename or "").suffix.lower() not in VIDEO_EXT:
             raise HTTPException(400, f"{kind} recording must be a video file ({', '.join(sorted(VIDEO_EXT))})")
     if Path(sop.filename or "").suffix.lower() not in (".md", ".markdown", ".txt"):
         raise HTTPException(400, "SOP must be a Markdown (.md) file")
-    p = store.create(title.strip() or "SOP video")
+    p = store.create(title.strip() or "Warehouse SOP Video")
     orig = store.originals(p.id)
     names = {}
     for f, role in ((physical, "physical"), (system, "system"), (sop, "sop")):
@@ -174,6 +179,44 @@ async def create_project(
     p.sop = SopDoc(filename=names["sop"][0])
     p.review.auto_approve = auto_approve
     _record(p, "upload", files={r: n[1] for r, n in names.items()})
+    if auto_start:
+        runner.start(p.id)
+    return _view(p)
+
+
+async def _save_upload(f: UploadFile, dst: Path) -> None:
+    with dst.open("wb") as out:
+        while chunk := await f.read(1 << 20):
+            out.write(chunk)
+
+
+async def _create_demo(title: str, physical: UploadFile | None, system: UploadFile | None, notes: UploadFile | None,
+                       auto_start: bool, auto_approve: bool):
+    """Demo video: one recording (screen -> system slot, camera -> physical slot) and optional notes."""
+    given = [(f, role) for f, role in ((physical, "physical"), (system, "system")) if f]
+    if len(given) != 1:
+        raise HTTPException(400, "a demo video uses exactly one recording")
+    video, role = given[0]
+    if Path(video.filename or "").suffix.lower() not in VIDEO_EXT:
+        raise HTTPException(400, f"the recording must be a video file ({', '.join(sorted(VIDEO_EXT))})")
+    if notes and Path(notes.filename or "").suffix.lower() not in (".md", ".markdown", ".txt"):
+        raise HTTPException(400, "notes must be a Markdown (.md) or text file")
+    p = store.create(title.strip() or Path(video.filename or "").stem.replace("_", " ").replace("-", " ").strip()
+                     or "Product demo")
+    p.mode = "demo"
+    orig = store.originals(p.id)
+    files = {}
+    dst = orig / f"{role}{Path(video.filename).suffix.lower()}"
+    await _save_upload(video, dst)
+    setattr(p, role, SourceMedia(role=role, filename=dst.name))
+    files[role] = video.filename
+    if notes:
+        dst = orig / f"notes{Path(notes.filename).suffix.lower()}"
+        await _save_upload(notes, dst)
+        p.notes = SopDoc(filename=dst.name)
+        files["notes"] = notes.filename
+    p.review.auto_approve = auto_approve
+    _record(p, "upload", files=files, mode="demo")
     if auto_start:
         runner.start(p.id)
     return _view(p)
@@ -236,6 +279,8 @@ class SyncBody(BaseModel):
 @app.put("/api/projects/{pid}/sync")
 def set_sync(pid: str, body: SyncBody):
     p = _editable(pid)
+    if p.mode == "demo":
+        raise HTTPException(400, "a demo video has one recording: there is nothing to synchronize")
     p.sync_override_ms = body.lag_ms
     _record(p, "sync-override", lag_ms=body.lag_ms)
     return _view(p)

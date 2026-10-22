@@ -36,6 +36,7 @@ export interface Project {
   physical: { filename: string; duration_ms: number; width: number; height: number; fps: number; has_audio: boolean } | null;
   system: { filename: string; duration_ms: number; width: number; height: number; fps: number; has_audio: boolean } | null;
   sop: { filename: string; title: string } | null;
+  mode: "sop" | "demo"; notes: { filename: string; title: string } | null;
   stages: Record<string, StageStatus>;
   stage_order: { name: string; title: string; gate: boolean }[];
   running: boolean;
@@ -54,7 +55,7 @@ export interface Project {
   deliverables: string[];
 }
 
-export interface Summary { id: string; title: string; updated_at: string; progress: number; current: string | null; current_state: string; running: boolean }
+export interface Summary { id: string; title: string; updated_at: string; progress: number; current: string | null; current_state: string; running: boolean; mode?: "sop" | "demo" }
 export interface Health {
   ffmpeg: string | null; remotion: boolean; renderer: string; skellysync: boolean;
   vlm: { provider: string; model: string; base_url: string }; llm: string; tts: { provider: string; voice: string };
@@ -101,7 +102,7 @@ export const api = {
   download: (id: string) => `${P(id)}/download`,
 };
 
-export const PLACEHOLDERS = new Set(["Screen change on the WISE system", "Physical handling motion", "Activity in both views", "New action"]);
+export const PLACEHOLDERS = new Set(["Screen change on the WMS system", "Screen change on the WISE system", "Physical handling motion", "Activity in both views", "New action"]);
 /** Detected but not described: no description, no SOP step, no narration. Skipped in the video. */
 export const isHint = (e: Event) => PLACEHOLDERS.has(e.action) && !e.sop_step_id && !e.narration;
 

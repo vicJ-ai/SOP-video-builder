@@ -14,12 +14,16 @@ PREVIEW = "preview/analysis.mp4"
 
 
 def _inputs(p):
+    if p.mode == "demo":
+        return {"demo": True}
     return {"sync": [p.sync.lag_ms, p.sync.shared_start_physical_ms, p.sync.shared_duration_ms],
             "sha": [p.physical.sha256, p.system.sha256], "vlm": settings.vlm_provider, "renderer": "ffmpeg-fast"}
 
 
 def run(ctx: Ctx) -> str:
     from ..providers.vlm import get_vlm
+    if ctx.project.mode == "demo":
+        raise Skip("single recording — frames are read straight from it")
     if not get_vlm().available():
         raise Skip("no vision model configured — the analysis preview is not needed")
     p = ctx.project

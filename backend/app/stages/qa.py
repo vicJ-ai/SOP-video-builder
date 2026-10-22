@@ -26,6 +26,7 @@ from .render import FINAL_NAME, build_props
 COMPLETION_WORDS = re.compile(r"\b(complete[ds]?|done|finished|success\w*|confirmed|saved|printed|posted|closed)\b", re.I)
 # keep in sync with render/src/Final.tsx
 CONTENT_W, CONTENT_H, SYSTEM_SHARE = 1920 - 96 - 24, 1080 - 132 - 176, 0.66
+SINGLE_W = 1780  # one recording uses the whole footage width
 
 
 def _inputs(p):
@@ -85,7 +86,10 @@ def run(ctx: Ctx) -> str:
     lag_frames = frames(p.sync.lag_ms, settings.fps)
     bad = [s for s in props["segments"] if s["kind"] == "source"
            and abs((s["physicalStartFrame"] - s["systemStartFrame"]) - lag_frames) > 1]
-    check("views synchronized in every segment", not bad, f"lag {p.sync.lag_ms} ms in {len(props['segments'])} segments")
+    if p.mode == "demo":
+        check("single recording — no synchronization needed", True, p.sources()[0].role, severity="info")
+    else:
+        check("views synchronized in every segment", not bad, f"lag {p.sync.lag_ms} ms in {len(props['segments'])} segments")
     sources = [s for s in p.timeline.segments if s.kind == "source"]
     src_total = sum(s.shared_ms for s in sources)
     cut_total = sum(e - s for s, e in p.timeline.removed(p.sync.shared_duration_ms))
@@ -95,9 +99,10 @@ def run(ctx: Ctx) -> str:
           and all(abs(s.rate - SPEEDUP_RATE) < 0.1 for s in fast),
           f"{src_total} ms of source footage; {len(fast)} fast-forwarded pause(s)")
     unconfirmed = [c.label for c in p.sync.checks if not c.ok]
-    check("sync landmarks verified (start/middle/end)", not unconfirmed or p.sync.manual,
-          "manual offset set by reviewer" if p.sync.manual else (f"unconfirmed: {', '.join(unconfirmed)}" if unconfirmed else "all confirmed"),
-          severity="warning")
+    if p.mode == "sop":
+        check("sync landmarks verified (start/middle/end)", not unconfirmed or p.sync.manual,
+              "manual offset set by reviewer" if p.sync.manual else (f"unconfirmed: {', '.join(unconfirmed)}" if unconfirmed else "all confirmed"),
+              severity="warning")
 
     # --- narration
     live = sorted((c for c in p.cues if not c.dropped and c.out_start_ms is not None), key=lambda c: c.out_start_ms)
@@ -118,9 +123,13 @@ def run(ctx: Ctx) -> str:
         e = p.event(c.event_id)
         if e is None or e.rejected:
             unsupported.append(f"{c.id}: event missing")
+        elif p.mode == "demo":
+            if not (e.trusted or e.human_edited):
+                unsupported.append(f"{c.id}: low-confidence detection")
         elif e.evidence_status not in ("demonstrated", "partial") and not e.human_edited:
             unsupported.append(f"{c.id}: event {e.evidence_status or 'not linked to SOP'}")
-    check("every cue narrates a demonstrated or reviewer-placed event", not unsupported, "; ".join(unsupported[:5]),
+    check("every cue narrates a confident or reviewer-placed event" if p.mode == "demo" else
+          "every cue narrates a demonstrated or reviewer-placed event", not unsupported, "; ".join(unsupported[:5]),
           severity="warning")
     claims = []
     for c in live:
@@ -147,11 +156,18 @@ def run(ctx: Ctx) -> str:
     check("captions match narration timing", not mismatched and len(srt) == len(p.captions),
           f"{len(srt)} SRT entries; mismatched cues: {', '.join(mismatched[:5]) or 'none'}")
 
-    # --- WISE readability during system actions (geometry; frames exported for human check)
-    scale = min(CONTENT_W * SYSTEM_SHARE / max(1, p.system.width), CONTENT_H / max(1, p.system.height))
-    rendered_h = round(p.system.height * min(1.0, scale))
-    check("WISE readable when emphasised", scale >= 0.45 or rendered_h >= 700,
-          f"WISE shown at {scale:.0%} ({round(p.system.width * min(1, scale))}x{rendered_h})", severity="warning")
+    # --- WMS readability during system actions (geometry; frames exported for human check)
+    if p.mode == "demo":
+        if p.system:  # the screen fills the whole footage area
+            scale = min(SINGLE_W / max(1, p.system.width), CONTENT_H / max(1, p.system.height))
+            rendered_h = round(p.system.height * min(1.0, scale))
+            check("screen readable", scale >= 0.45 or rendered_h >= 700,
+                  f"screen shown at {scale:.0%} ({round(p.system.width * min(1, scale))}x{rendered_h})", severity="warning")
+    else:
+        scale = min(CONTENT_W * SYSTEM_SHARE / max(1, p.system.width), CONTENT_H / max(1, p.system.height))
+        rendered_h = round(p.system.height * min(1.0, scale))
+        check("WMS readable when emphasised", scale >= 0.45 or rendered_h >= 700,
+              f"WMS shown at {scale:.0%} ({round(p.system.width * min(1, scale))}x{rendered_h})", severity="warning")
     qa_dir = ctx.out / "qa_frames"
     qa_dir.mkdir(exist_ok=True)
     for old in qa_dir.glob("*.jpg"):
@@ -177,14 +193,14 @@ def run(ctx: Ctx) -> str:
         inner_start, inner_dur = shared + 300, (e - max(s, intro_end)) - 600
         if inner_dur < 500:
             continue
-        # freezedetect averages over the whole frame, so a small moving panel next to an idle WISE
+        # freezedetect averages over the whole frame, so a small moving panel next to an idle WMS
         # screen can read as "frozen". A real freeze is static at the pixel level — confirm that first.
         out_frames = gray_frames(final, fps=6, start_ms=max(s, intro_end) + 300, dur_ms=inner_dur,
                                  width=160, height=90).astype(np.int16)
         if len(out_frames) > 1 and float(np.median(np.abs(np.diff(out_frames, axis=0)).mean(axis=(1, 2)))) > 0.03:
             continue
         moving = False
-        for role in ("physical", "system"):
+        for role in (m.role for m in p.sources()):
             src = p.sync.physical_ms(inner_start) if role == "physical" else p.sync.system_ms(inner_start)
             fr = gray_frames(ctx.proxy(role), fps=4, start_ms=src, dur_ms=inner_dur)
             moving |= float(syncalgo.activity_mask(fr, threshold=1.0).mean() if len(fr) else 0) > 0.25
@@ -193,7 +209,10 @@ def run(ctx: Ctx) -> str:
     check("no frozen footage (output static while source moves)", not frozen, ", ".join(frozen[:5]) or "none")
 
     # --- provenance
-    trace = all([p.physical.sha256, p.system.sha256, p.sop.sha256]) and "analyze" in p.provenance
+    if p.mode == "demo":
+        trace = all(m.sha256 for m in p.sources()) and (not p.notes or p.notes.sha256) and "analyze" in p.provenance
+    else:
+        trace = all([p.physical.sha256, p.system.sha256, p.sop.sha256]) and "analyze" in p.provenance
     check("outputs traceable to source hashes and model versions", trace, "see manifest.json")
 
     report = QAReport(target=FINAL_NAME, checks=checks)

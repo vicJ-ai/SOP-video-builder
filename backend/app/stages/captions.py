@@ -15,7 +15,8 @@ LAYOUT_LEAD_MS = 300
 def _inputs(p):
     return {"cues": [[c.id, c.event_id, c.spoken_text or c.text, c.out_start_ms, c.out_end_ms, c.dropped] for c in p.cues],
             "events": [[e.id, e.view, e.sop_step_id, e.action] for e in p.live_events()],
-            "steps": [[s.id, s.title, s.text] for s in p.sop_steps], "segments": [s.model_dump() for s in p.timeline.segments]}
+            "steps": [[s.id, s.title, s.text] for s in p.sop_steps], "segments": [s.model_dump() for s in p.timeline.segments],
+            **({"headings": [c.heading for c in p.cues]} if p.mode == "demo" else {})}
 
 
 def heading_for(step_text: str, fallback: str) -> str:
@@ -38,7 +39,8 @@ def build_layout(p) -> list[LayoutKey]:
         step = p.step(e.sop_step_id)
         start = max(intro_end, min(cue.out_start_ms, cue.anchor_out_ms) - LAYOUT_LEAD_MS)
         key = LayoutKey(out_start_ms=start, out_end_ms=footage_end, focus=FOCUS[e.view],
-                        heading=heading_for((step.title or step.text) if step else "", e.action), step_id=e.sop_step_id,
+                        heading=(cue.heading or heading_for("", e.action)) if p.mode == "demo"
+                        else heading_for((step.title or step.text) if step else "", e.action), step_id=e.sop_step_id,
                         step_index=order.get(e.sop_step_id) or (keys[-1].step_index if keys else None))
         if keys and keys[-1].focus == key.focus and keys[-1].heading == key.heading:
             continue

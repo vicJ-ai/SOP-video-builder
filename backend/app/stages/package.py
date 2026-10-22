@@ -75,6 +75,14 @@ def coverage_markdown(p) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _coverage_files(p, out) -> None:
+    (out / "sop_coverage_report.md").write_text(coverage_markdown(p), encoding="utf-8")
+    (out / "sop_coverage_report.json").write_text(json.dumps({
+        "steps": [{**s.model_dump(), "coverage": next((c.model_dump() for c in p.coverage.steps if c.step_id == s.id), None)}
+                  for s in p.sop_steps],
+        "discrepancies": [d.model_dump() for d in p.coverage.discrepancies]}, indent=2), encoding="utf-8")
+
+
 def run(ctx: Ctx) -> str:
     p = ctx.project
     out = ctx.out
@@ -100,12 +108,12 @@ def run(ctx: Ctx) -> str:
         if src.exists():
             shutil.copy2(src, out / name)
 
-    # SOP coverage report
-    (out / "sop_coverage_report.md").write_text(coverage_markdown(p), encoding="utf-8")
-    (out / "sop_coverage_report.json").write_text(json.dumps({
-        "steps": [{**s.model_dump(), "coverage": next((c.model_dump() for c in p.coverage.steps if c.step_id == s.id), None)}
-                  for s in p.sop_steps],
-        "discrepancies": [d.model_dump() for d in p.coverage.discrepancies]}, indent=2), encoding="utf-8")
+    # SOP coverage report (a demo video has no SOP)
+    if p.mode == "demo":
+        for name in ("sop_coverage_report.md", "sop_coverage_report.json"):
+            (out / name).unlink(missing_ok=True)
+    else:
+        _coverage_files(p, out)
 
     # QA report (markdown)
     qa = next((r for r in p.qa if r.target == FINAL_NAME), None)
@@ -125,8 +133,10 @@ def run(ctx: Ctx) -> str:
     manifest = {
         "generated_at": now_iso(), "project_id": p.id, "title": p.title,
         "inputs": {r: {"file": m.filename, "sha256": m.sha256, "duration_ms": m.duration_ms, "size": [m.width, m.height],
-                       "fps": m.fps, "has_audio": m.has_audio} for r, m in (("physical", p.physical), ("system", p.system))}
-        | {"sop": {"file": p.sop.filename, "sha256": p.sop.sha256, "title": p.sop.title}},
+                       "fps": m.fps, "has_audio": m.has_audio} for r, m in (("physical", p.physical), ("system", p.system)) if m}
+        | ({"sop": {"file": p.sop.filename, "sha256": p.sop.sha256, "title": p.sop.title}} if p.mode == "sop" else
+           {"notes": p.notes and {"file": p.notes.filename, "sha256": p.notes.sha256, "title": p.notes.title}}),
+        **({"mode": "demo"} if p.mode == "demo" else {}),
         "footage_in_deliverable": "proxy (constant-frame-rate H.264 of the originals; same timing)",
         "sync": p.sync.model_dump(),
         "timeline": p.timeline.model_dump(),

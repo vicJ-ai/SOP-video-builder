@@ -1,4 +1,4 @@
-"""10. Verify WISE text separately: PaddleOCR on full-resolution system frames of system events.
+"""10. Verify WMS text separately: PaddleOCR on full-resolution system frames of system events.
 
 OCR complements the VLM: OCR reads text, the VLM interprets the action. Disagreement on a control
 name or value flags the event for review. Without PaddleOCR, a configured VLM does a dedicated
@@ -101,4 +101,4 @@ def run(ctx: Ctx) -> str:
     return f"{checked} system frames read with {engine}; {disagreements} text disagreements flagged"
 
 
-STAGE = Stage("ocr", "Verify WISE text (OCR)", "1", _inputs, run)
+STAGE = Stage("ocr", "Verify WMS text (OCR)", "1", _inputs, run)
