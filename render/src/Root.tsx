@@ -21,7 +21,7 @@ const previewDefaults: PreviewProps = {
   durationInFrames: 90,
   title: "Analysis preview",
   physical: { ...source, label: "Physical" },
-  system: { ...source, label: "WISE" },
+  system: { ...source, label: "WMS" },
   physicalStartFrame: 0,
   systemStartFrame: 0,
 };
@@ -35,7 +35,7 @@ const finalDefaults: FinalProps = {
   subtitle: "Standard Operating Procedure",
   draft: true,
   physical: { ...source, label: "Floor" },
-  system: { ...source, label: "WISE" },
+  system: { ...source, label: "WMS" },
   segments: [{ kind: "intro", fromFrame: 0, durationInFrames: 90, physicalStartFrame: 0, systemStartFrame: 0 }],
   cues: [],
   captions: [],

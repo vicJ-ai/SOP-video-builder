@@ -25,7 +25,7 @@ from .. import syncalgo
 from ..config import settings
 from ..media import audio_samples, gray_frames
 from ..models import OutsideFootage, SyncCheck, SyncEstimate, SyncResult
-from ..pipeline import Ctx, Stage
+from ..pipeline import Ctx, Skip, Stage
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +38,8 @@ AGREE_MS = 100
 
 
 def _inputs(p):
+    if p.mode == "demo":
+        return {"demo": [[m.role, m.sha256, m.duration_ms] for m in p.sources()]}
     return {
         "sha": [p.physical.sha256, p.system.sha256],
         "override": p.sync_override_ms,
@@ -170,8 +172,23 @@ def _outside(ctx: Ctx, shared_start: int, duration: int, lag_ms: int) -> list[Ou
 # --------------------------------------------------------------------------- stage
 
 
+def _single(ctx: Ctx) -> None:
+    """A demo video has one recording: shared time is simply its own time."""
+    p = ctx.project
+    m = p.sources()[0]
+    p.sync = SyncResult(lag_ms=0, method="single-recording", shared_start_physical_ms=0,
+                        shared_duration_ms=m.duration_ms)
+    (ctx.work / "sync").mkdir(exist_ok=True)
+    (ctx.work / "sync" / "sync.json").write_text(p.sync.model_dump_json(indent=2))
+    _write_waveforms(ctx)
+    ctx.provenance("sync", estimators=[], chosen="single-recording")
+    raise Skip(f"single recording — nothing to sync ({m.duration_ms/1000:.1f}s)")
+
+
 def run(ctx: Ctx) -> str:
     p = ctx.project
+    if p.mode == "demo":
+        _single(ctx)
     audio = p.physical.has_audio and p.system.has_audio
     max_lag_s = max(p.physical.duration_ms, p.system.duration_ms) / 1000
     estimates: list[SyncEstimate] = []
@@ -247,7 +264,7 @@ def _write_waveforms(ctx: Ctx) -> None:
     out = {}
     for role in ("physical", "system"):
         media = getattr(ctx.project, role)
-        if not media.has_audio:
+        if media is None or not media.has_audio:
             out[role] = []
             continue
         s = audio_samples(ctx.proxy(role), sr=SR)

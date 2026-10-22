@@ -102,6 +102,8 @@ def _export_otio(ctx: Ctx, path) -> bool:
     tl.metadata["sop_video_builder"] = {"lag_ms": p.sync.lag_ms, "project": p.id}
     for role in ("physical", "system"):
         media = getattr(p, role)
+        if media is None:  # demo video: one recording
+            continue
         track = otio.schema.Track(name=role, kind=otio.schema.TrackKind.Video)
         ref = otio.schema.ExternalReference(
             target_url=(ctx.originals / media.filename).as_uri(),

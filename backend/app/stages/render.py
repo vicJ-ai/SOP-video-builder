@@ -29,7 +29,7 @@ def build_props(ctx: Ctx, *, draft: bool) -> dict:
         segments.append({
             "kind": s.kind, "fromFrame": s.from_frame if s.from_frame is not None else frames(s.out_start_ms, fps),
             "durationInFrames": s.duration_frames if s.duration_frames is not None else max(1, frames(s.duration_ms, fps)),
-            "availableRoles": s.available_roles or ["physical", "system"],
+            "availableRoles": s.available_roles or [m.role for m in p.sources()],
             "physicalStartFrame": frames(sync.physical_ms(s.shared_start_ms), fps) if s.kind in ("source", "hold") else 0,
             "systemStartFrame": frames(sync.system_ms(s.shared_start_ms), fps) if s.kind in ("source", "hold") else 0,
             "playbackRate": s.rate,
@@ -55,15 +55,27 @@ def build_props(ctx: Ctx, *, draft: bool) -> dict:
             if e.review_required and not e.approved and at is not None:
                 flags.append({"fromFrame": frames(at, fps), "toFrame": frames(at + 2500, fps),
                               "title": "Needs review", "description": (e.review_reasons or [e.action])[0]})
+    if p.mode == "demo":
+        # Demo video: one recording; title card from the notes, "what you'll see" from the line headings.
+        title = _clip((p.notes.title if p.notes else "") or p.title, 110)
+        subtitle = _clip(p.notes.purpose, 180) if p.notes and p.notes.purpose else "Product demo"
+        views = {m.role: {"src": m.proxy, "width": m.width, "height": m.height,
+                          "label": "Screen" if m.role == "system" else "Body camera"} for m in p.sources()}
+        physical, system = views.get("physical"), views.get("system")
+        workflow = [_clip(h, 70) for h in dict.fromkeys(k.heading for k in p.layout if k.heading)][:4]
+    else:
+        title = _clip(p.sop.title or p.title, 110)
+        subtitle = _clip(p.sop.purpose, 180) if p.sop.purpose else "Standard Operating Procedure"
+        physical = {"src": p.physical.proxy, "width": p.physical.width, "height": p.physical.height, "label": "Floor"}
+        system = {"src": p.system.proxy, "width": p.system.width, "height": p.system.height, "label": "WMS"}
+        # Title card "demonstrated workflow": the SOP's first steps (token-free; no model involved).
+        workflow = [_clip(heading_for(s.title or s.text, s.text), 70) for s in p.sop_steps][:4]
     return {
         "fps": fps, "width": 1920, "height": 1080, "durationInFrames": frames(p.timeline.duration_ms, fps),
-        "title": _clip(p.sop.title or p.title, 110), "draft": draft,
-        "subtitle": _clip(p.sop.purpose, 180) if p.sop.purpose else "Standard Operating Procedure",
-        "physical": {"src": p.physical.proxy, "width": p.physical.width, "height": p.physical.height, "label": "Floor"},
-        "system": {"src": p.system.proxy, "width": p.system.width, "height": p.system.height, "label": "WISE"},
-        # Title card "demonstrated workflow": the SOP's first steps (token-free; no model involved).
-        "workflow": [_clip(heading_for(s.title or s.text, s.text), 70) for s in p.sop_steps][:4],
+        "title": title, "draft": draft, "subtitle": subtitle, "physical": physical, "system": system,
+        "workflow": workflow,
         "template": p.template, "demo": False,
+        **({"variant": "demo"} if p.mode == "demo" else {}),
         "segments": segments, "cues": cues,
         "captions": [{"startMs": c.start_ms, "endMs": c.end_ms, "fromFrame": c.from_frame, "endFrame": c.end_frame,
                       "text": c.text.replace("\n", " ")} for c in p.captions],
@@ -123,12 +135,14 @@ def _render(ctx: Ctx, *, draft: bool):
 
 
 def _inputs(p):
+    doc = p.notes if p.mode == "demo" else p.sop
     return {"cues": [[c.id, c.audio_hash, c.out_start_ms, c.out_end_ms, c.dropped] for c in p.cues],
             "captions": [c.model_dump() for c in p.captions], "layout": [k.model_dump() for k in p.layout],
             "segments": [s.model_dump() for s in p.timeline.segments], "sync": p.sync.lag_ms,
-            "coverage": p.coverage.model_dump(), "title": [p.title, p.sop.title], "renderer": settings.renderer,
-            "template": p.template, "steps": [[s.id, s.title, s.text] for s in p.sop_steps], "purpose": p.sop.purpose,
-            "review": [[e.id, e.review_required, e.approved] for e in p.events]}
+            "coverage": p.coverage.model_dump(), "title": [p.title, doc.title if doc else ""], "renderer": settings.renderer,
+            "template": p.template, "steps": [[s.id, s.title, s.text] for s in p.sop_steps], "purpose": doc.purpose if doc else "",
+            "review": [[e.id, e.review_required, e.approved] for e in p.events],
+            **({"demo": [m.role for m in p.sources()]} if p.mode == "demo" else {})}
 
 
 def run_draft(ctx: Ctx) -> str:

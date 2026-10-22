@@ -14,7 +14,7 @@ import re
 from pydantic import BaseModel, Field
 
 from ..models import Coverage, Discrepancy, Event, StepCoverage
-from ..pipeline import Ctx, Stage
+from ..pipeline import Ctx, Skip, Stage
 from ..providers.errors import ClaudeAccountError
 from ..providers.llm import get_llm
 from ..sopparse import parse_intro, parse_sop
@@ -27,11 +27,15 @@ STOP = set("the a an and or to of in on at for with from by is are be this that 
 
 
 def _parse_inputs(p):
+    if p.mode == "demo":
+        return {"demo": True}
     return {"sop": p.sop.sha256}
 
 
 def run_parse(ctx: Ctx) -> str:
     p = ctx.project
+    if p.mode == "demo":
+        raise Skip("demo video: no SOP")
     text = (ctx.originals / p.sop.filename).read_text(encoding="utf-8-sig")
     title, steps = parse_sop(text)
     p.sop.title = title or p.sop.title
@@ -179,6 +183,8 @@ def _compare_inputs(p):
 
 def run_compare(ctx: Ctx) -> str:
     p = ctx.project
+    if p.mode == "demo":
+        raise Skip("demo video: no SOP to compare")
     steps = p.sop_steps
     # undescribed signal-only detections are hints, never evidence
     events = [e for e in p.live_events() if not e.placeholder]

@@ -83,6 +83,7 @@ export type FinalProps = {
   brandFrames?: {intro: string; outro: string};
   workflow?: string[];
   demo?: boolean;
+  variant?: "demo"; // customer-facing product demo from one recording
   segments: SegmentProp[];
   cues: CueProp[];
   captions: CaptionProp[];

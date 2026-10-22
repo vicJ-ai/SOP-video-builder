@@ -4,7 +4,7 @@ The project file (project.json) is the database; the rendered MP4 is only a view
 
 Clocks — all integer milliseconds, never float seconds:
   * physical source time  — position in the physical-work recording
-  * system source time    — position in the WISE/system recording
+  * system source time    — position in the WMS/system recording
   * shared time           — 0 at the start of the shared (overlapping) interval. Events,
                             transcript words and narration anchors live here.
   * output time           — position in the edited video (after intro / cuts).
@@ -233,7 +233,7 @@ class Event(BaseModel):
     ocr: list[OcrHit] = Field(default_factory=list)
     ocr_frame_ms: int | None = None
     confidence: float = 0.5
-    source: Literal["vlm-coarse", "vlm-fine", "mock", "human"] = "vlm-coarse"
+    source: Literal["vlm-coarse", "vlm-fine", "mock", "human", "speech"] = "vlm-coarse"
     sop_step_id: str | None = None
     evidence_status: EvidenceStatus | None = None
     transcript_context: str = ""  # supporting context only — never proof
@@ -328,6 +328,7 @@ class NarrationCue(BaseModel):
     schedule_notes: list[str] = Field(default_factory=list)
     dropped: bool = False  # event was cut or cue could not be placed
     phase: Literal["opener", "title", "operational"] = "operational"
+    heading: str = ""  # demo: short on-screen heading written with the line
     from_frame: int | None = None  # set by frameclock.resolve_cues
     end_frame: int | None = None
     duration_frames: int | None = None
@@ -392,7 +393,7 @@ class Review(BaseModel):
     auto_approve: bool = False  # skip the review stop (CI / batch use)
 
 
-PLACEHOLDER_ACTIONS = {"Screen change on the WISE system", "Physical handling motion", "Activity in both views", "New action"}
+PLACEHOLDER_ACTIONS = {"Screen change on the WMS system", "Screen change on the WISE system", "Physical handling motion", "Activity in both views", "New action"}
 
 
 class Project(BaseModel):
@@ -404,6 +405,8 @@ class Project(BaseModel):
     physical: SourceMedia | None = None
     system: SourceMedia | None = None
     sop: SopDoc | None = None
+    mode: Literal["sop", "demo"] = "sop"  # demo: one recording + optional notes, customer-facing narration
+    notes: SopDoc | None = None  # demo only: optional notes .md describing what the recording shows
 
     stages: dict[str, StageStatus] = Field(default_factory=dict)
     sync_override_ms: int | None = None  # reviewer-set lag; wins over every estimator
@@ -422,6 +425,9 @@ class Project(BaseModel):
     review: Review = Field(default_factory=Review)
     history: list[HumanAction] = Field(default_factory=list)
     provenance: dict = Field(default_factory=dict)  # model / tool versions + settings per stage
+
+    def sources(self) -> list[SourceMedia]:
+        return [m for m in (self.physical, self.system) if m]
 
     def event(self, event_id: str) -> Event | None:
         return next((e for e in self.events if e.id == event_id), None)
